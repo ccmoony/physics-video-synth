@@ -1,0 +1,11 @@
+/assets/
+/renders/
+/tools/
+
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+*.blend1
+*.part

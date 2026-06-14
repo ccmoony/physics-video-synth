@@ -54,24 +54,26 @@ batch script resolves Blender in this order: explicit `--blender`, `BLENDER_BIN`
 script calls `python3` for the PyBullet simulation, so `pybullet` must be
 available in that Python environment.
 
+All commands below assume the current working directory is the repository root.
+
 Install the Python runtime dependency:
 
 ```bash
-python3 -m pip install -r physics-video-synth/requirements.txt
+python3 -m pip install -r requirements.txt
 ```
 
 Download or refresh the local render assets. The render script requires these
 Poly Haven and ambientCG assets so every render uses the same PBR inputs:
 
 ```bash
-python3 physics-video-synth/scripts/download_render_assets.py
+python3 scripts/download_render_assets.py
 ```
 
 ```bash
 ${BLENDER_BIN:-blender} -b \
-  --python physics-video-synth/scripts/render_ball_block_impact.py -- \
+  --python scripts/render_ball_block_impact.py -- \
   --mode animation \
-  --out-dir physics-video-synth/renders/current_side_impact \
+  --out-dir renders/current_side_impact \
   --resolution 1280 720 \
   --fps 24 \
   --duration-sec 8 \
@@ -94,10 +96,10 @@ Deterministic scenarios can also be replayed from metadata:
 
 ```bash
 ${BLENDER_BIN:-blender} -b \
-  --python physics-video-synth/scripts/render_ball_block_impact.py -- \
+  --python scripts/render_ball_block_impact.py -- \
   --mode animation \
-  --out-dir physics-video-synth/renders/replay_case \
-  --scenario-json physics-video-synth/renders/example/scenario_metadata.json
+  --out-dir renders/replay_case \
+  --scenario-json renders/example/scenario_metadata.json
 ```
 
 Use `--scenario-overrides-json overrides.json` to recursively override a sampled
@@ -114,8 +116,8 @@ The named PCVE suite builder creates a small deterministic set of ball/block
 motion cases with standardized output names:
 
 ```bash
-python3 physics-video-synth/scripts/build_pcve_motion_suite.py \
-  --out-root physics-video-synth/renders/pcve_general_motion_suite \
+python3 scripts/build_pcve_motion_suite.py \
+  --out-root renders/pcve_general_motion_suite \
   --resolution 1280 720 \
   --fps 24 \
   --duration-sec 8 \
@@ -134,8 +136,8 @@ rendered cases, `scenario_overrides.json`. The suite root also contains
 For a quick smoke test, render several deterministic preview samples:
 
 ```bash
-python3 physics-video-synth/scripts/batch_render_ball_block_impact.py \
-  --out-root physics-video-synth/renders/batch_preview \
+python3 scripts/batch_render_ball_block_impact.py \
+  --out-root renders/batch_preview \
   --count 4 \
   --mode preview \
   --resolution 320 180 \
@@ -145,8 +147,8 @@ python3 physics-video-synth/scripts/batch_render_ball_block_impact.py \
 For dataset-style videos, use animation mode:
 
 ```bash
-python3 physics-video-synth/scripts/batch_render_ball_block_impact.py \
-  --out-root physics-video-synth/renders/batch_animation \
+python3 scripts/batch_render_ball_block_impact.py \
+  --out-root renders/batch_animation \
   --count 16 \
   --mode animation \
   --resolution 1280 720 \

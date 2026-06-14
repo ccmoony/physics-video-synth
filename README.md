@@ -90,6 +90,45 @@ the wooden block instead of launching from the side. Add
 small horizontal initial velocity. Use `--block-texture-asset stained_pine`
 only when you explicitly want the warmer alternate block maps.
 
+Deterministic scenarios can also be replayed from metadata:
+
+```bash
+${BLENDER_BIN:-blender} -b \
+  --python physics-video-synth/scripts/render_ball_block_impact.py -- \
+  --mode animation \
+  --out-dir physics-video-synth/renders/replay_case \
+  --scenario-json physics-video-synth/renders/example/scenario_metadata.json
+```
+
+Use `--scenario-overrides-json overrides.json` to recursively override a sampled
+scenario while preserving the normal render pipeline. This is how benchmark
+suites pin exact object locations, velocities, masses, and camera settings.
+
+For PCVE benchmark examples, keep `--block-texture-asset wood_table` across all
+cases. The motion suite builder treats other block textures as stale outputs so
+comparisons do not mix texture quality with motion-fitting behavior.
+
+## PCVE Motion Suite
+
+The named PCVE suite builder creates a small deterministic set of ball/block
+motion cases with standardized output names:
+
+```bash
+python3 physics-video-synth/scripts/build_pcve_motion_suite.py \
+  --out-root physics-video-synth/renders/pcve_general_motion_suite \
+  --resolution 1280 720 \
+  --fps 24 \
+  --duration-sec 8 \
+  --samples 32 \
+  --device auto \
+  --skip-existing
+```
+
+Outputs are written under `cases/<case_id>/` with `video.mp4`,
+`ground_truth_transforms.json`, `scenario_metadata.json`, and, for newly
+rendered cases, `scenario_overrides.json`. The suite root also contains
+`suite_manifest.json` with case descriptions, commands, and output paths.
+
 ## Batch Render
 
 For a quick smoke test, render several deterministic preview samples:

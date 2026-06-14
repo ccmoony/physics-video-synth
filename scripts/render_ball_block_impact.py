@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import math
 import random
@@ -146,6 +147,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--physics-jitter", type=float, default=1.0)
     parser.add_argument("--camera-jitter", type=float, default=0.0)
     parser.add_argument("--surface-marks", choices=("none", "subtle", "full"), default="none")
+    parser.add_argument(
+        "--scenario-json",
+        type=Path,
+        default=None,
+        help="Optional complete scenario_metadata.json to render instead of sampling one.",
+    )
+    parser.add_argument(
+        "--scenario-overrides-json",
+        type=Path,
+        default=None,
+        help="Optional JSON object recursively merged onto the sampled scenario.",
+    )
     parser.add_argument("--video-postprocess", action=argparse.BooleanOptionalAction, default=True)
     return parser.parse_args(argv)
 
@@ -365,6 +378,51 @@ def create_scenario(args: argparse.Namespace) -> dict[str, object]:
         },
         "ball_scuffs": extra_scuffs,
     }
+    return scenario
+
+
+def read_json(path: Path) -> dict[str, object]:
+    data = json.loads(path.expanduser().read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected a JSON object: {path}")
+    return data
+
+
+def recursive_update(
+    base: dict[str, object],
+    updates: dict[str, object],
+) -> dict[str, object]:
+    merged = copy.deepcopy(base)
+    for key, value in updates.items():
+        if (
+            isinstance(value, dict)
+            and isinstance(merged.get(key), dict)
+        ):
+            merged[key] = recursive_update(
+                merged[key],  # type: ignore[arg-type]
+                value,
+            )
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+
+def scenario_from_args(args: argparse.Namespace) -> dict[str, object]:
+    if args.scenario_json is not None:
+        scenario = read_json(args.scenario_json)
+        scenario.setdefault(
+            "scenario_source",
+            str(args.scenario_json.expanduser().resolve()),
+        )
+    else:
+        scenario = create_scenario(args)
+
+    if args.scenario_overrides_json is not None:
+        overrides = read_json(args.scenario_overrides_json)
+        scenario = recursive_update(scenario, overrides)
+        scenario["scenario_overrides_path"] = str(
+            args.scenario_overrides_json.expanduser().resolve()
+        )
     return scenario
 
 
@@ -1659,7 +1717,7 @@ def render_animation(args: argparse.Namespace, scenario: dict[str, object]) -> N
 
 def main() -> None:
     args = parse_args()
-    scenario = create_scenario(args)
+    scenario = scenario_from_args(args)
     build_scene(args, scenario)
     if args.mode == "preview":
         render_preview(args)

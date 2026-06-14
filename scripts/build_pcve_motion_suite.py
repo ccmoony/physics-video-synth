@@ -1,0 +1,522 @@
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+import subprocess
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+
+WORKSPACE_DIR = Path(__file__).resolve().parents[1]
+DEFAULT_BLENDER = WORKSPACE_DIR / "tools" / "blender-3.6.23-linux-x64" / "blender"
+RENDER_SCRIPT = WORKSPACE_DIR / "scripts" / "render_ball_block_impact.py"
+ARCHIVE_ROOT = WORKSPACE_DIR / "renders" / "archive" / "2026-05-experiments"
+CANONICAL_BLOCK_TEXTURE = "wood_table"
+
+
+@dataclass(frozen=True)
+class ExistingCase:
+    case_id: str
+    description: str
+    source_dir: Path
+
+
+@dataclass(frozen=True)
+class RenderCase:
+    case_id: str
+    description: str
+    seed: int
+    motion: str
+    block_texture_asset: str
+    overrides: dict[str, Any]
+
+
+EXISTING_CASES = (
+    ExistingCase(
+        case_id="existing_side_impact_wood_table",
+        description="Existing moderate side impact baseline with static camera.",
+        source_dir=ARCHIVE_ROOT
+        / "batch_demo_720p_8s_s32_4k_all_pbr_side_impact_wood_table_static_camera"
+        / "sample_0000",
+    ),
+)
+
+
+NEW_CASES = (
+    RenderCase(
+        case_id="side_moderate_head_on",
+        description="Ground rolling ball, moderate head-on contact, fully visible.",
+        seed=3101,
+        motion="side_impact",
+        block_texture_asset=CANONICAL_BLOCK_TEXTURE,
+        overrides={
+            "motion": "side_impact",
+            "physics": {
+                "motion": "side_impact",
+                "ball_initial_location": [-2.45, -0.10, 0.341],
+                "ball_initial_velocity": [4.45, 0.02, 0.0],
+                "block_location": [0.23, -0.02, 0.35],
+                "block_yaw_deg": 0.0,
+                "ball_mass": 0.58,
+                "block_mass": 0.65,
+                "floor_friction": 0.82,
+                "ball_friction": 0.38,
+                "ball_restitution": 0.76,
+                "block_friction": 0.32,
+                "block_restitution": 0.52,
+            },
+        },
+    ),
+    RenderCase(
+        case_id="side_oblique_moderate",
+        description="Ground rolling ball with mild oblique velocity and block yaw.",
+        seed=3102,
+        motion="side_impact",
+        block_texture_asset=CANONICAL_BLOCK_TEXTURE,
+        overrides={
+            "motion": "side_impact",
+            "physics": {
+                "motion": "side_impact",
+                "ball_initial_location": [-2.60, -0.22, 0.341],
+                "ball_initial_velocity": [4.80, 0.34, 0.0],
+                "block_location": [0.20, 0.02, 0.35],
+                "block_yaw_deg": 4.0,
+                "ball_mass": 0.58,
+                "block_mass": 0.68,
+                "floor_friction": 0.78,
+                "ball_friction": 0.36,
+                "ball_restitution": 0.74,
+                "block_friction": 0.34,
+                "block_restitution": 0.50,
+            },
+        },
+    ),
+    RenderCase(
+        case_id="side_slow_graze",
+        description="Lower-energy ground contact with a shallow lateral graze.",
+        seed=3103,
+        motion="side_impact",
+        block_texture_asset=CANONICAL_BLOCK_TEXTURE,
+        overrides={
+            "motion": "side_impact",
+            "physics": {
+                "motion": "side_impact",
+                "ball_initial_location": [-2.30, -0.34, 0.341],
+                "ball_initial_velocity": [3.95, 0.28, 0.0],
+                "block_location": [0.24, -0.04, 0.35],
+                "block_yaw_deg": -3.0,
+                "ball_mass": 0.60,
+                "block_mass": 0.66,
+                "floor_friction": 0.86,
+                "ball_friction": 0.42,
+                "ball_restitution": 0.70,
+                "block_friction": 0.36,
+                "block_restitution": 0.48,
+            },
+        },
+    ),
+    RenderCase(
+        case_id="drop_centered_soft",
+        description="Aerial free fall nearly centered above the wood block.",
+        seed=3201,
+        motion="drop_onto_block",
+        block_texture_asset=CANONICAL_BLOCK_TEXTURE,
+        overrides={
+            "motion": "drop_onto_block",
+            "physics": {
+                "motion": "drop_onto_block",
+                "ball_initial_location": [0.07, -0.02, 2.12],
+                "ball_initial_velocity": [0.08, 0.00, -0.16],
+                "block_location": [0.23, -0.02, 0.35],
+                "block_yaw_deg": 0.0,
+                "ball_mass": 0.58,
+                "block_mass": 0.68,
+                "floor_friction": 0.82,
+                "ball_friction": 0.38,
+                "ball_restitution": 0.76,
+                "block_friction": 0.34,
+                "block_restitution": 0.50,
+            },
+        },
+    ),
+    RenderCase(
+        case_id="drop_lateral_mild",
+        description="Aerial drop with mild lateral drift before contact.",
+        seed=3202,
+        motion="drop_onto_block",
+        block_texture_asset=CANONICAL_BLOCK_TEXTURE,
+        overrides={
+            "motion": "drop_onto_block",
+            "physics": {
+                "motion": "drop_onto_block",
+                "ball_initial_location": [0.02, -0.11, 2.20],
+                "ball_initial_velocity": [0.28, 0.09, -0.18],
+                "block_location": [0.25, -0.01, 0.35],
+                "block_yaw_deg": 3.0,
+                "ball_mass": 0.56,
+                "block_mass": 0.70,
+                "floor_friction": 0.80,
+                "ball_friction": 0.36,
+                "ball_restitution": 0.78,
+                "block_friction": 0.35,
+                "block_restitution": 0.52,
+            },
+        },
+    ),
+)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Build a named PCVE synthetic motion benchmark suite."
+    )
+    parser.add_argument(
+        "--out-root",
+        type=Path,
+        default=WORKSPACE_DIR / "renders" / "pcve_general_motion_suite",
+    )
+    parser.add_argument("--blender", type=Path, default=DEFAULT_BLENDER)
+    parser.add_argument("--resolution", nargs=2, type=int, default=(1280, 720))
+    parser.add_argument("--fps", type=int, default=24)
+    parser.add_argument("--duration-sec", type=float, default=8.0)
+    parser.add_argument("--samples", type=int, default=32)
+    parser.add_argument("--device", choices=("auto", "cpu"), default="auto")
+    parser.add_argument("--surface-marks", choices=("none", "subtle", "full"), default="none")
+    parser.add_argument("--physics-jitter", type=float, default=0.0)
+    parser.add_argument("--camera-jitter", type=float, default=0.0)
+    parser.add_argument("--skip-existing", action="store_true")
+    parser.add_argument(
+        "--keep-stale-cases",
+        action="store_true",
+        help="Keep old case directories that are no longer part of this suite.",
+    )
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--verbose-render",
+        action="store_true",
+        help="Stream the full Blender/ffmpeg render log instead of showing only suite progress.",
+    )
+    return parser.parse_args()
+
+
+def write_json(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def read_json(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def block_texture_asset(metadata_path: Path) -> str | None:
+    metadata = read_json(metadata_path)
+    materials = metadata.get("materials")
+    if not isinstance(materials, dict):
+        return None
+    value = materials.get("block_texture_asset")
+    return str(value) if value is not None else None
+
+
+def validate_block_texture(
+    metadata_path: Path,
+    *,
+    expected: str = CANONICAL_BLOCK_TEXTURE,
+) -> None:
+    actual = block_texture_asset(metadata_path)
+    if actual != expected:
+        raise ValueError(
+            f"Expected block_texture_asset={expected!r} in {metadata_path}, got {actual!r}."
+        )
+
+
+def clean_stale_case_dirs(out_root: Path, *, keep_case_ids: set[str]) -> None:
+    cases_dir = out_root / "cases"
+    if not cases_dir.exists():
+        return
+    for case_dir in sorted(cases_dir.iterdir()):
+        if not case_dir.is_dir() or case_dir.name in keep_case_ids:
+            continue
+        print(f"[suite] remove stale case directory {case_dir}")
+        shutil.rmtree(case_dir)
+
+
+def case_outputs_match_texture(
+    case_dir: Path,
+    *,
+    expected: str = CANONICAL_BLOCK_TEXTURE,
+) -> bool:
+    metadata_path = case_dir / "scenario_metadata.json"
+    if not metadata_path.exists():
+        return False
+    try:
+        validate_block_texture(metadata_path, expected=expected)
+    except (json.JSONDecodeError, ValueError):
+        return False
+    return True
+
+
+def preferred_video_path(case_dir: Path) -> Path:
+    preferred = (
+        case_dir / "ball_block_impact.mp4",
+        case_dir / "ball_block_impact_cycles.mp4",
+        case_dir / "ball_block_impact_cycles222111.mp4",
+    )
+    for path in preferred:
+        if path.exists():
+            return path
+    matches = sorted(case_dir.glob("*.mp4"))
+    if not matches:
+        raise FileNotFoundError(f"No mp4 found in {case_dir}")
+    return matches[0]
+
+
+def require_file(path: Path, *, description: str) -> Path:
+    if not path.exists():
+        raise FileNotFoundError(f"Missing {description}: {path}")
+    return path
+
+
+def copy_case_files(source_dir: Path, target_dir: Path) -> dict[str, str]:
+    if not source_dir.exists():
+        raise FileNotFoundError(f"Missing existing case directory: {source_dir}")
+    validate_block_texture(source_dir / "scenario_metadata.json")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    video_source = preferred_video_path(source_dir)
+    outputs = {
+        "video": target_dir / "video.mp4",
+        "ground_truth": target_dir / "ground_truth_transforms.json",
+        "scenario_metadata": target_dir / "scenario_metadata.json",
+    }
+    shutil.copy2(video_source, outputs["video"])
+    for filename, key in (
+        ("ground_truth_transforms.json", "ground_truth"),
+        ("scenario_metadata.json", "scenario_metadata"),
+    ):
+        source = require_file(source_dir / filename, description=f"existing case {filename}")
+        shutil.copy2(source, outputs[key])
+    for key, path in outputs.items():
+        require_file(path, description=f"copied {key}")
+    validate_block_texture(outputs["scenario_metadata"])
+    return {key: str(path.resolve()) for key, path in outputs.items()}
+
+
+def existing_case_outputs(case_dir: Path) -> dict[str, str]:
+    outputs = {
+        "video": case_dir / "video.mp4",
+        "ground_truth": case_dir / "ground_truth_transforms.json",
+        "scenario_metadata": case_dir / "scenario_metadata.json",
+    }
+    for key, path in outputs.items():
+        require_file(path, description=f"existing suite {key}")
+    validate_block_texture(outputs["scenario_metadata"])
+    return {key: str(path.resolve()) for key, path in outputs.items()}
+
+
+def render_command(
+    args: argparse.Namespace,
+    case: RenderCase,
+    *,
+    case_dir: Path,
+    overrides_path: Path,
+) -> list[str]:
+    return [
+        str(args.blender.expanduser().resolve()),
+        "-b",
+        "--python",
+        str(RENDER_SCRIPT.resolve()),
+        "--",
+        "--mode",
+        "animation",
+        "--out-dir",
+        str(case_dir.resolve()),
+        "--resolution",
+        str(int(args.resolution[0])),
+        str(int(args.resolution[1])),
+        "--fps",
+        str(int(args.fps)),
+        "--duration-sec",
+        str(float(args.duration_sec)),
+        "--samples",
+        str(int(args.samples)),
+        "--device",
+        str(args.device),
+        "--seed",
+        str(int(case.seed)),
+        "--motion",
+        str(case.motion),
+        "--block-texture-asset",
+        str(case.block_texture_asset),
+        "--physics-jitter",
+        str(float(args.physics_jitter)),
+        "--camera-jitter",
+        str(float(args.camera_jitter)),
+        "--surface-marks",
+        str(args.surface_marks),
+        "--scenario-overrides-json",
+        str(overrides_path.resolve()),
+    ]
+
+
+def standardize_render_outputs(case_dir: Path) -> dict[str, str]:
+    video_source = preferred_video_path(case_dir)
+    video_target = case_dir / "video.mp4"
+    if video_source.resolve() != video_target.resolve():
+        shutil.copy2(video_source, video_target)
+    outputs = {
+        "video": video_target,
+        "ground_truth": case_dir / "ground_truth_transforms.json",
+        "scenario_metadata": case_dir / "scenario_metadata.json",
+        "scenario_overrides": case_dir / "scenario_overrides.json",
+    }
+    for key, path in outputs.items():
+        require_file(path, description=f"rendered {key}")
+    validate_block_texture(outputs["scenario_metadata"])
+    return {key: str(path.resolve()) for key, path in outputs.items()}
+
+
+def tail(text: str | None, *, max_lines: int = 80) -> str:
+    if not text:
+        return ""
+    lines = text.splitlines()
+    return "\n".join(lines[-max_lines:])
+
+
+def run_render(command: list[str], *, verbose: bool) -> None:
+    if verbose:
+        subprocess.run(command, check=True)
+        return
+
+    result = subprocess.run(command, text=True, capture_output=True)
+    if result.returncode == 0:
+        return
+
+    print("[suite] render command failed; stdout tail:")
+    print(tail(result.stdout))
+    print("[suite] render command failed; stderr tail:")
+    print(tail(result.stderr))
+    raise subprocess.CalledProcessError(
+        result.returncode,
+        command,
+        output=result.stdout,
+        stderr=result.stderr,
+    )
+
+
+def main() -> None:
+    args = parse_args()
+    args.out_root.mkdir(parents=True, exist_ok=True)
+    keep_case_ids = {
+        *(case.case_id for case in EXISTING_CASES),
+        *(case.case_id for case in NEW_CASES),
+    }
+    if not args.keep_stale_cases and not args.dry_run:
+        clean_stale_case_dirs(args.out_root, keep_case_ids=keep_case_ids)
+    manifest_path = args.out_root / "suite_manifest.json"
+    manifest: dict[str, Any] = {
+        "schema_version": 1,
+        "suite_name": "pcve_general_motion_suite",
+        "description": (
+            "Moderate ball/wood motion cases for checking whether PCVE free-motion "
+            "and 4D fitting generalize beyond the two original examples."
+        ),
+        "resolution": [int(args.resolution[0]), int(args.resolution[1])],
+        "fps": int(args.fps),
+        "duration_sec": float(args.duration_sec),
+        "samples": int(args.samples),
+        "cases": [],
+    }
+    write_json(manifest_path, manifest)
+
+    for case in EXISTING_CASES:
+        case_dir = args.out_root / "cases" / case.case_id
+        record: dict[str, Any] = {
+            "case_id": case.case_id,
+            "kind": "existing",
+            "description": case.description,
+            "source_dir": str(case.source_dir.resolve()),
+            "case_dir": str(case_dir.resolve()),
+            "status": "pending",
+        }
+        manifest["cases"].append(record)
+        write_json(manifest_path, manifest)
+        if (
+            args.skip_existing
+            and (case_dir / "video.mp4").exists()
+            and case_outputs_match_texture(case_dir)
+        ):
+            record["status"] = "skipped_existing"
+            record["outputs"] = existing_case_outputs(case_dir)
+        else:
+            record["outputs"] = copy_case_files(case.source_dir, case_dir)
+            record["status"] = "completed"
+        write_json(manifest_path, manifest)
+
+    for case in NEW_CASES:
+        case_dir = args.out_root / "cases" / case.case_id
+        overrides_path = case_dir / "scenario_overrides.json"
+        write_json(overrides_path, case.overrides)
+        command = render_command(
+            args,
+            case,
+            case_dir=case_dir,
+            overrides_path=overrides_path,
+        )
+        record = {
+            "case_id": case.case_id,
+            "kind": "rendered",
+            "description": case.description,
+            "seed": int(case.seed),
+            "motion": case.motion,
+            "case_dir": str(case_dir.resolve()),
+            "scenario_overrides_json": str(overrides_path.resolve()),
+            "command": command,
+            "status": "pending",
+        }
+        manifest["cases"].append(record)
+        write_json(manifest_path, manifest)
+
+        expected_video = case_dir / "video.mp4"
+        if (
+            args.skip_existing
+            and expected_video.exists()
+            and case_outputs_match_texture(case_dir)
+        ):
+            record["status"] = "skipped_existing"
+            record["outputs"] = standardize_render_outputs(case_dir)
+            write_json(manifest_path, manifest)
+            continue
+        if args.skip_existing and expected_video.exists():
+            print(
+                f"[suite] existing {case.case_id} is stale or missing "
+                f"{CANONICAL_BLOCK_TEXTURE}; rerender"
+            )
+        if args.dry_run:
+            record["status"] = "dry_run"
+            write_json(manifest_path, manifest)
+            print(" ".join(command))
+            continue
+
+        case_dir.mkdir(parents=True, exist_ok=True)
+        start_time = time.perf_counter()
+        print(f"[suite] render {case.case_id}")
+        try:
+            run_render(command, verbose=bool(args.verbose_render))
+        except subprocess.CalledProcessError:
+            record["status"] = "failed"
+            record["elapsed_sec"] = round(time.perf_counter() - start_time, 3)
+            write_json(manifest_path, manifest)
+            raise
+        record["outputs"] = standardize_render_outputs(case_dir)
+        record["elapsed_sec"] = round(time.perf_counter() - start_time, 3)
+        record["status"] = "completed"
+        write_json(manifest_path, manifest)
+        print(f"[suite] completed {case.case_id} in {record['elapsed_sec']:.1f}s")
+
+    print(f"[suite] manifest={manifest_path.resolve()}")
+
+
+if __name__ == "__main__":
+    main()

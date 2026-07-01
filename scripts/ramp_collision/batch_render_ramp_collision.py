@@ -8,10 +8,9 @@ import subprocess
 from pathlib import Path
 
 
-WORKSPACE_DIR = Path(__file__).resolve().parents[1]
+WORKSPACE_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_BLENDER = WORKSPACE_DIR / "tools" / "blender-3.6.23-linux-x64" / "blender"
-RENDER_SCRIPT = WORKSPACE_DIR / "scripts" / "render_ramp_collision.py"
-BLOCK_TEXTURE_CHOICES = ("wood_table",)
+RENDER_SCRIPT = WORKSPACE_DIR / "scripts" / "ramp_collision" / "render_ramp_collision.py"
 
 
 def parse_args() -> argparse.Namespace:

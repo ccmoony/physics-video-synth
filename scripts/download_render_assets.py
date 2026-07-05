@@ -30,6 +30,14 @@ ASSETS = {
             "wooden_lounge_2k.hdr": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/wooden_lounge_2k.hdr",
         },
     },
+    "lythwood_room": {
+        "type": "hdri",
+        "source_url": "https://polyhaven.com/a/lythwood_room",
+        "recommended_for": "realistic residential room interior with windows, neutral walls, and soft natural light",
+        "files": {
+            "lythwood_room_2k.hdr": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/lythwood_room_2k.hdr",
+        },
+    },
     "wood_floor_worn": {
         "type": "texture",
         "source_url": "https://polyhaven.com/a/wood_floor_worn",
@@ -116,6 +124,20 @@ ASSETS = {
     },
 }
 AMBIENTCG_ZIP_ASSETS = {
+    "Leather039": {
+        "type": "texture",
+        "source": "ambientCG",
+        "license": "CC0",
+        "source_url": "https://ambientcg.com/view?id=Leather039",
+        "zip_url": "https://ambientcg.com/get?file=Leather039_4K-JPG.zip",
+        "recommended_for": "high-quality realistic leather grain for basketball / sports ball surface",
+        "files": {
+            "Leather039_4K-JPG_Color.jpg": "Leather039_4K-JPG_Color.jpg",
+            "Leather039_4K-JPG_Displacement.jpg": "Leather039_4K-JPG_Displacement.jpg",
+            "Leather039_4K-JPG_NormalGL.jpg": "Leather039_4K-JPG_NormalGL.jpg",
+            "Leather039_4K-JPG_Roughness.jpg": "Leather039_4K-JPG_Roughness.jpg",
+        },
+    },
     "Rubber002": {
         "type": "texture",
         "source": "ambientCG",

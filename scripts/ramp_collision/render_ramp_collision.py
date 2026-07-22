@@ -469,7 +469,7 @@ def create_scenario(args: argparse.Namespace) -> dict[str, object]:
                 "ball_restitution": 0.6,
                 "marble_radius": MARBLE_RADIUS,
                 "marble_mass": 0.05,
-                "marble_friction": 0.4,
+                "marble_friction": 0.15,
                 "marble_restitution": 0.3,
                 "ramp_angle_deg": BOOK_ANGLE_DEG,
                 "ramp_length": BOOK_LENGTH,
@@ -477,7 +477,7 @@ def create_scenario(args: argparse.Namespace) -> dict[str, object]:
                 "ramp_thickness": BOOK_THICKNESS,
                 "ramp_friction": 0.7,
                 "floor_friction": 0.4,
-                "gravity": [0.0, 0.0, -1.0],
+                "gravity": [0.0, 0.0, -9.8],
             },
             "jitter": {
                 "preview_frame": int(args.preview_frame),

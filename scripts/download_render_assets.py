@@ -74,6 +74,30 @@ ASSETS = {
             "stained_pine_rough_4k.jpg": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/4k/stained_pine/stained_pine_rough_4k.jpg",
         },
     },
+    "concrete_floor_damaged_01": {
+        "type": "texture",
+        "source_url": "https://polyhaven.com/a/concrete_floor_damaged_01",
+        "recommended_for": "weathered outdoor courtyard/patio ground for car_ramp_climb",
+        "files": {
+            "concrete_floor_damaged_01_ao_4k.jpg": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/4k/concrete_floor_damaged_01/concrete_floor_damaged_01_ao_4k.jpg",
+            "concrete_floor_damaged_01_diff_4k.jpg": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/4k/concrete_floor_damaged_01/concrete_floor_damaged_01_diff_4k.jpg",
+            "concrete_floor_damaged_01_disp_4k.png": "https://dl.polyhaven.org/file/ph-assets/Textures/png/4k/concrete_floor_damaged_01/concrete_floor_damaged_01_disp_4k.png",
+            "concrete_floor_damaged_01_nor_gl_4k.jpg": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/4k/concrete_floor_damaged_01/concrete_floor_damaged_01_nor_gl_4k.jpg",
+            "concrete_floor_damaged_01_rough_4k.jpg": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/4k/concrete_floor_damaged_01/concrete_floor_damaged_01_rough_4k.jpg",
+        },
+    },
+    "red_brick": {
+        "type": "texture",
+        "source_url": "https://polyhaven.com/a/red_brick",
+        "recommended_for": "brick wall backdrop for the car_ramp_climb scene",
+        "files": {
+            "red_brick_ao_4k.jpg": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/4k/red_brick/red_brick_ao_4k.jpg",
+            "red_brick_diff_4k.jpg": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/4k/red_brick/red_brick_diff_4k.jpg",
+            "red_brick_disp_4k.png": "https://dl.polyhaven.org/file/ph-assets/Textures/png/4k/red_brick/red_brick_disp_4k.png",
+            "red_brick_nor_gl_4k.jpg": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/4k/red_brick/red_brick_nor_gl_4k.jpg",
+            "red_brick_rough_4k.jpg": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/4k/red_brick/red_brick_rough_4k.jpg",
+        },
+    },
     "book_cover_01": {
         "type": "texture",
         "source_url": "https://polyhaven.com/a/decorative_book_set_01",
@@ -124,6 +148,21 @@ ASSETS = {
     },
 }
 AMBIENTCG_ZIP_ASSETS = {
+    "Asphalt031": {
+        "type": "texture",
+        "source": "ambientCG",
+        "license": "CC0",
+        "source_url": "https://ambientcg.com/view?id=Asphalt031",
+        "zip_url": "https://ambientcg.com/get?file=Asphalt031_4K-JPG.zip",
+        "recommended_for": "grey asphalt/road ramp surface for car_ramp_climb (dark variant reuses this "
+        "same texture, darkened via a Hue/Saturation node rather than a second download)",
+        "files": {
+            "Asphalt031_4K-JPG_Color.jpg": "Asphalt031_4K-JPG_Color.jpg",
+            "Asphalt031_4K-JPG_Displacement.jpg": "Asphalt031_4K-JPG_Displacement.jpg",
+            "Asphalt031_4K-JPG_NormalGL.jpg": "Asphalt031_4K-JPG_NormalGL.jpg",
+            "Asphalt031_4K-JPG_Roughness.jpg": "Asphalt031_4K-JPG_Roughness.jpg",
+        },
+    },
     "Leather039": {
         "type": "texture",
         "source": "ambientCG",

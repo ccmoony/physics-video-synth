@@ -33,7 +33,7 @@ The output video is written to `renders/test_tennis_video/sample_0000/tennis_fli
   --out-dir renders/test_tennis_video \
   --resolution 960 540 \
   --fps 24 \
-  --duration-sec 6.0 \
+  --duration-sec 3.0 \
   --samples 64 \
   --device cpu \
   --seed 3000

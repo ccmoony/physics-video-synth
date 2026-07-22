@@ -272,8 +272,8 @@ def create_scenario(args: argparse.Namespace) -> dict[str, object]:
                 "ball_rolling_friction": 0.015,
                 "floor_friction": 0.6,
                 "launch_location": [-8.0, -3.0, 5.0],
-                "launch_velocity": [5.0, 0.0, 0.0],
-                "gravity": [0.0, 0.0, -2.4525],
+                "launch_velocity": [9.973, 0.0, 0.0],
+                "gravity": [0.0, 0.0, -9.8],
             },
             "jitter": {
                 "preview_frame": int(args.preview_frame),

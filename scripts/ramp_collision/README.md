@@ -30,7 +30,7 @@ The output video is written to `renders/test_ramp_video/sample_0000/ramp_collisi
 ./tools/blender-3.6.23-linux-x64/blender -b \
   --python scripts/ramp_collision/render_ramp_collision.py -- \
   --mode animation \
-  --out-dir renders/test_ramp_video \
+  --out-dir renders/ramp_collision \
   --resolution 960 540 \
   --fps 24 \
   --duration-sec 3.0 \
@@ -39,7 +39,7 @@ The output video is written to `renders/test_ramp_video/sample_0000/ramp_collisi
   --seed 2000
 ```
 
-The output video is written to `renders/test_ramp_video/ramp_collision.mp4`.
+The output video is written to `renders/ramp_collision/ramp_collision.mp4`.
 
 ## Simulate only
 

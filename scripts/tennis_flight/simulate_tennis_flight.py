@@ -23,10 +23,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--launch-x", type=float, default=-8.0)
     parser.add_argument("--launch-y", type=float, default=-3.0)
     parser.add_argument("--launch-z", type=float, default=5.0)
-    parser.add_argument("--launch-vx", type=float, default=5.0)
+    parser.add_argument("--launch-vx", type=float, default=9.973)
     parser.add_argument("--launch-vy", type=float, default=0.0)
     parser.add_argument("--launch-vz", type=float, default=0.0)
-    parser.add_argument("--gravity-z", type=float, default=-2.4525)
+    parser.add_argument("--gravity-z", type=float, default=-9.8)
     return parser.parse_args()
 
 

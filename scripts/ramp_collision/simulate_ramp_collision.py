@@ -31,7 +31,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ramp-friction", type=float, default=0.7)
     parser.add_argument("--ball-friction", type=float, default=0.45)
     parser.add_argument("--ball-restitution", type=float, default=0.6)
-    parser.add_argument("--marble-friction", type=float, default=0.4)
+    parser.add_argument("--marble-friction", type=float, default=0.15)
     parser.add_argument("--marble-restitution", type=float, default=0.3)
     return parser.parse_args()
 
@@ -106,7 +106,7 @@ def simulate(args: argparse.Namespace) -> dict:
     client = p.connect(p.DIRECT)
     try:
         p.resetSimulation(physicsClientId=client)
-        p.setGravity(0.0, 0.0, -1.0, physicsClientId=client)
+        p.setGravity(0.0, 0.0, -9.8, physicsClientId=client)
         p.setTimeStep(dt, physicsClientId=client)
         p.setPhysicsEngineParameter(
             fixedTimeStep=dt,
@@ -182,7 +182,7 @@ def simulate(args: argparse.Namespace) -> dict:
                 -1,
                 lateralFriction=float(args.marble_friction),
                 spinningFriction=0.025,
-                rollingFriction=0.0015,
+                rollingFriction=0.0012,
                 restitution=float(args.marble_restitution),
                 linearDamping=0.1,
                 angularDamping=0.1,
@@ -205,7 +205,7 @@ def simulate(args: argparse.Namespace) -> dict:
             -1,
             lateralFriction=float(args.ball_friction),
             spinningFriction=0.02,
-            rollingFriction=0.0012,
+            rollingFriction=0.002,
             restitution=float(args.ball_restitution),
             linearDamping=0.05,
             angularDamping=0.05,

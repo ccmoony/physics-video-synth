@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import Any
 
 
-WORKSPACE_DIR = Path(__file__).resolve().parents[1]
+WORKSPACE_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_BLENDER = WORKSPACE_DIR / "tools" / "blender-3.6.23-linux-x64" / "blender"
-RENDER_SCRIPT = WORKSPACE_DIR / "scripts" / "render_ball_block_impact.py"
+RENDER_SCRIPT = WORKSPACE_DIR / "scripts" / "ball_block" / "render_ball_block_impact.py"
 ARCHIVE_ROOT = WORKSPACE_DIR / "renders" / "archive" / "2026-05-experiments"
 CANONICAL_BLOCK_TEXTURE = "wood_table"
 

@@ -16,7 +16,7 @@ import bpy
 from mathutils import Vector
 
 
-WORKSPACE_DIR = Path(__file__).resolve().parents[1]
+WORKSPACE_DIR = Path(__file__).resolve().parents[2]
 POLYHAVEN_DIR = WORKSPACE_DIR / "assets" / "polyhaven"
 AMBIENTCG_DIR = WORKSPACE_DIR / "assets" / "ambientcg"
 

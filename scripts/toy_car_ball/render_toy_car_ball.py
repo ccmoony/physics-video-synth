@@ -463,6 +463,11 @@ def create_scenario(args: argparse.Namespace) -> dict[str, object]:
                 "car_start_x": 0.1,
                 "ball_start_x": -(TABLE_HALF_X) + BALL_RADIUS * 1.2,
                 "gravity": [0.0, 0.0, -9.8],
+                # Two-slot presence list (car, ball). A PCVE DELETE edit
+                # writes 0 at the object's slot; only slot 1 (ball) is
+                # actually removable in the sim -- the car drives the
+                # whole scene so it is always kept.
+                "active": [1, 1],
             },
             "jitter": {
                 "preview_frame": int(args.preview_frame),
@@ -527,6 +532,8 @@ def run_physics_simulation(args: argparse.Namespace, scenario: dict[str, object]
             str(float(physics["ball_start_x"])),
             "--gravity-z",
             str(float(physics["gravity"][2])),
+            "--ball-active",
+            str(int(physics.get("active", [1, 1])[1])),
         ],
         check=True,
     )
@@ -546,18 +553,24 @@ def set_linear_keyframes(objects) -> None:
 def apply_physics_animation(
     car: bpy.types.Object, ball: bpy.types.Object, physics: dict,
 ) -> None:
+    # A DELETE edit hid the ball in build_scene; skip keyframing it.
+    animate_ball = not bool(ball.hide_render)
     car.rotation_mode = "QUATERNION"
-    ball.rotation_mode = "QUATERNION"
+    if animate_ball:
+        ball.rotation_mode = "QUATERNION"
     for frame_record in physics["frames"]:
         frame = int(frame_record["frame_index"])
-        for obj, key in ((car, "car"), (ball, "ball")):
+        pairs = [(car, "car")]
+        if animate_ball:
+            pairs.append((ball, "ball"))
+        for obj, key in pairs:
             data = frame_record[key]
             quat = data["quaternion_xyzw"]
             obj.location = data["location"]
             obj.rotation_quaternion = (quat[3], quat[0], quat[1], quat[2])
             obj.keyframe_insert(data_path="location", frame=frame)
             obj.keyframe_insert(data_path="rotation_quaternion", frame=frame)
-    set_linear_keyframes([car, ball])
+    set_linear_keyframes([car] + ([ball] if animate_ball else []))
 
 
 def export_ground_truth(
@@ -580,7 +593,7 @@ def export_ground_truth(
         "physics": {key: value for key, value in physics.items() if key != "frames"},
         "objects": {
             "car": {"object_name": car.name},
-            "ball": {"object_name": ball.name},
+            "ball": {"present": not bool(ball.hide_render), "object_name": ball.name},
         },
         "camera": {
             "object_name": camera.name,
@@ -611,12 +624,16 @@ def export_ground_truth(
                     "linear_velocity": physics_frame["car"]["linear_velocity"],
                     "angular_velocity": physics_frame["car"]["angular_velocity"],
                 },
-                "ball": {
-                    "matrix_world": [[float(v) for v in row] for row in ball.matrix_world],
-                    "location": [float(v) for v in ball.location],
-                    "linear_velocity": physics_frame["ball"]["linear_velocity"],
-                    "angular_velocity": physics_frame["ball"]["angular_velocity"],
-                },
+                "ball": (
+                    {"present": False}
+                    if bool(ball.hide_render)
+                    else {
+                        "matrix_world": [[float(v) for v in row] for row in ball.matrix_world],
+                        "location": [float(v) for v in ball.location],
+                        "linear_velocity": physics_frame["ball"]["linear_velocity"],
+                        "angular_velocity": physics_frame["ball"]["angular_velocity"],
+                    }
+                ),
                 "camera_matrix_world": [[float(v) for v in row] for row in camera.matrix_world],
                 "camera_world_to_camera_matrix": [
                     [float(v) for v in row] for row in camera.matrix_world.inverted()
@@ -789,6 +806,11 @@ def build_scene(
         (float(physics["ball_start_x"]), SHELF_DEPTH_Y, TABLE_Z + BALL_RADIUS),
         ball_master,
     )
+    # DELETE edit: hide the ball from render + viewport. apply_physics_animation
+    # reads hide_render and skips keyframing it.
+    if not int(physics.get("active", [1, 1])[1]):
+        ball.hide_viewport = True
+        ball.hide_render = True
 
     # Static decoration, not physics-driven: a small potted plant to the
     # right of the car's start position, set back toward the wall like a

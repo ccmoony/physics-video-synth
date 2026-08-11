@@ -289,6 +289,18 @@ def build_scenario(args: argparse.Namespace) -> dict[str, Any]:
                 "launch_heading_deg": 0.0,
                 "ball_a_radius": BALL_A_DIAMETER / 2.0,
                 "ball_b_radius": BALL_B_DIAMETER / 2.0,
+                # Baseline glass-density masses (solid sphere, 2500 kg/m^3
+                # -- same as the sim's default when --ball-*-mass is not
+                # given). Made explicit here so a PCVE `mass` edit has a
+                # baseline to diff against and so the scenario snapshot
+                # matches the value the sim actually uses.
+                "ball_a_mass": (4.0 / 3.0) * math.pi * (BALL_A_DIAMETER / 2.0) ** 3 * 2500.0,
+                "ball_b_mass": (4.0 / 3.0) * math.pi * (BALL_B_DIAMETER / 2.0) ** 3 * 2500.0,
+                # Two-slot presence list (big_marble, small_marble). A PCVE
+                # DELETE edit writes 0 at the marble's slot; only slot 1
+                # (small) is actually removable -- the big marble drives
+                # the sim so it is always kept.
+                "active": [1, 1],
                 "ball_b_x": 0.060,
                 "ball_b_y": 0.008,
                 "ball_a_restitution": 0.87,
@@ -668,11 +680,17 @@ def run_physics(args: argparse.Namespace, scenario: dict) -> dict:
         ("--gravity-z", "gravity_z"),
     ):
         command += [flag, str(float(ph[key]))]
-    # Masses are derived from the radii at glass density unless a case
-    # deliberately breaks that link, which is what makes them worth overriding.
+    # Masses are always passed explicitly now (the scenario baseline holds
+    # the glass-density defaults), so a PCVE `mass` edit has a well-defined
+    # from-value and there is no ambiguity between "derived" and "overridden".
     for flag, key in (("--ball-a-mass", "ball_a_mass"), ("--ball-b-mass", "ball_b_mass")):
         if ph.get(key) is not None:
             command += [flag, str(float(ph[key]))]
+
+    # Ball A is always present; only ball B is optional (the "target" that
+    # a DELETE edit removes).
+    active = ph.get("active", [1, 1])
+    command += ["--ball-b-active", str(int(active[1]))]
 
     subprocess.run(command, check=True)
     data = json.loads(out.read_text(encoding="utf-8"))
@@ -794,7 +812,13 @@ def build_scene(args: argparse.Namespace, scenario: dict, physics: dict):
                            2.0 * float(physics["objects"]["ball_b"]["radius"]),
                            float(cfg["b"]["hue"]), float(cfg["b"]["saturation"]))
     apply_keyframes(ball_a, physics["frames"], "ball_a")
-    apply_keyframes(ball_b, physics["frames"], "ball_b")
+    # DELETE edit: sim skipped creating ball_b (present=false, no per-frame
+    # data). Hide the mesh from the render instead of trying to animate it.
+    if physics["objects"]["ball_b"].get("present", True):
+        apply_keyframes(ball_b, physics["frames"], "ball_b")
+    else:
+        ball_b.hide_viewport = True
+        ball_b.hide_render = True
 
     cam_cfg = scenario["camera"]
     bpy.ops.object.camera_add(location=tuple(cam_cfg["location"]))
@@ -859,7 +883,8 @@ def export_ground_truth(out_dir: Path, ball_a, ball_b, camera, physics: dict,
             "ball_a": {"object_name": ball_a.name,
                        "radius": physics["objects"]["ball_a"]["radius"],
                        "mass": physics["objects"]["ball_a"]["mass"]},
-            "ball_b": {"object_name": ball_b.name,
+            "ball_b": {"present": bool(physics["objects"]["ball_b"].get("present", True)),
+                       "object_name": ball_b.name,
                        "radius": physics["objects"]["ball_b"]["radius"],
                        "mass": physics["objects"]["ball_b"]["mass"]},
             "table": {"footprint_x": list(TABLE_X), "footprint_y": list(TABLE_Y),
@@ -880,6 +905,7 @@ def export_ground_truth(out_dir: Path, ball_a, ball_b, camera, physics: dict,
         "scenario": scenario,
         "frames": [],
     }
+    ball_b_present = physics["objects"]["ball_b"].get("present", True)
     by_frame = {int(fr["frame_index"]): fr for fr in physics["frames"]}
     for frame in range(1, frame_end + 1):
         scene.frame_set(frame)
@@ -887,7 +913,10 @@ def export_ground_truth(out_dir: Path, ball_a, ball_b, camera, physics: dict,
         entry = {"frame_index": frame, "time_sec": (frame - 1) / float(fps),
                  "camera_matrix_world": [[float(v) for v in row]
                                          for row in camera.matrix_world]}
-        for key, obj in (("ball_a", ball_a), ("ball_b", ball_b)):
+        pairs = [("ball_a", ball_a)]
+        if ball_b_present:
+            pairs.append(("ball_b", ball_b))
+        for key, obj in pairs:
             entry[key] = {
                 "matrix_world": [[float(v) for v in row] for row in obj.matrix_world],
                 "linear_velocity": pf[key]["linear_velocity"],
@@ -896,8 +925,11 @@ def export_ground_truth(out_dir: Path, ball_a, ball_b, camera, physics: dict,
                 "spin_z": pf[key]["spin_z"],
                 "on_table": pf[key]["on_table"],
             }
+        if not ball_b_present:
+            entry["ball_b"] = {"present": False}
         entry["ball_a"]["phase"] = pf["ball_a"]["phase"]
-        entry["ball_b"]["moving"] = pf["ball_b"]["moving"]
+        if ball_b_present:
+            entry["ball_b"]["moving"] = pf["ball_b"]["moving"]
         records["frames"].append(entry)
     (out_dir / GROUND_TRUTH_NAME).write_text(json.dumps(records, indent=2), encoding="utf-8")
 

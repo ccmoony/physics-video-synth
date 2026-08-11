@@ -137,6 +137,47 @@ def parse_args() -> argparse.Namespace:
         "and the collision is a clean velocity swap; heavier and the striker "
         "rebounds backwards instead of stopping.",
     )
+    # --- Per-mallet overrides (the PCVE edit surface) ------------------------
+    # The three globals above set every mallet at once, which is what the
+    # batch sweeps want. A PCVE edit changes exactly one object, so each
+    # property also has a per-mallet list form that wins when given. Left at
+    # None the list is filled from the corresponding global, so the defaults
+    # and every existing caller are unchanged.
+    parser.add_argument(
+        "--mallet-masses",
+        nargs=3,
+        type=float,
+        default=None,
+        help="Per-mallet mass in kg, in relay order (blue, red, white). "
+        "Overrides MALLET_MASS and --middle-mass-scale when given.",
+    )
+    parser.add_argument(
+        "--mallet-restitutions",
+        nargs=3,
+        type=float,
+        default=None,
+        help="Per-mallet restitution, in relay order. Overrides "
+        "--mallet-restitution when given. Remember PyBullet multiplies the "
+        "pair, so changing one mallet only affects the impacts it is in.",
+    )
+    parser.add_argument(
+        "--mallet-frictions",
+        nargs=3,
+        type=float,
+        default=None,
+        help="Per-mallet lateral friction, in relay order. Overrides "
+        "--mallet-friction when given.",
+    )
+    parser.add_argument(
+        "--mallet-active",
+        nargs=3,
+        type=int,
+        default=(1, 1, 1),
+        help="Which mallets exist, in relay order. A 0 removes that mallet "
+        "from the simulation entirely; its frames still appear in the output "
+        "(frozen at its start position, active=false) so consumers keep a "
+        "fixed three-slot layout.",
+    )
     parser.add_argument("--gravity-z", type=float, default=-9.8)
     return parser.parse_args()
 
@@ -157,6 +198,31 @@ def simulate(args: argparse.Namespace) -> dict:
     substeps = int(args.substeps)
     dt = 1.0 / float(fps * substeps)
     push = float(args.push_speed)
+
+    # Resolve the per-mallet properties. The list forms win; where they are
+    # absent every mallet takes the global value (and the middle one its mass
+    # scale), which reproduces the pre-PCVE behaviour exactly.
+    active = tuple(bool(int(v)) for v in args.mallet_active)
+    if args.mallet_masses is not None:
+        masses = tuple(float(v) for v in args.mallet_masses)
+    else:
+        masses = (
+            MALLET_MASS,
+            MALLET_MASS * float(args.middle_mass_scale),
+            MALLET_MASS,
+        )
+    if args.mallet_restitutions is not None:
+        restitutions = tuple(float(v) for v in args.mallet_restitutions)
+    else:
+        restitutions = (float(args.mallet_restitution),) * 3
+    if args.mallet_frictions is not None:
+        frictions = tuple(float(v) for v in args.mallet_frictions)
+    else:
+        frictions = (float(args.mallet_friction),) * 3
+
+    start_positions = [
+        (START_X + index * SPACING, RELAY_Y, MALLET_HEIGHT / 2.0) for index in range(3)
+    ]
 
     client = p.connect(p.DIRECT)
     try:
@@ -207,23 +273,29 @@ def simulate(args: argparse.Namespace) -> dict:
             p.GEOM_CYLINDER, radius=MALLET_RADIUS, height=MALLET_HEIGHT,
             physicsClientId=client,
         )
-        mallets = []
+        # A removed mallet gets no body at all, and its slot holds None. The
+        # output keeps all three slots either way, so the renderer and the
+        # ground truth always see the same three-mallet layout and only have to
+        # read the active flag.
+        mallets: list[int | None] = []
         for index in range(3):
-            mass = MALLET_MASS * (float(args.middle_mass_scale) if index == 1 else 1.0)
+            if not active[index]:
+                mallets.append(None)
+                continue
             body = p.createMultiBody(
-                baseMass=mass,
+                baseMass=masses[index],
                 baseCollisionShapeIndex=mallet_shape,
                 baseVisualShapeIndex=-1,
-                basePosition=(START_X + index * SPACING, RELAY_Y, MALLET_HEIGHT / 2.0),
+                basePosition=start_positions[index],
                 baseOrientation=(0.0, 0.0, 0.0, 1.0),
                 physicsClientId=client,
             )
             p.changeDynamics(
                 body, -1,
-                lateralFriction=float(args.mallet_friction),
+                lateralFriction=frictions[index],
                 spinningFriction=0.0005,
                 rollingFriction=0.0,
-                restitution=float(args.mallet_restitution),
+                restitution=restitutions[index],
                 linearDamping=0.0,
                 angularDamping=0.2,
                 collisionMargin=0.001,
@@ -238,9 +310,12 @@ def simulate(args: argparse.Namespace) -> dict:
         for _ in range(int(round(float(args.settle_sec) / dt))):
             p.stepSimulation(physicsClientId=client)
         for index, body in enumerate(mallets):
+            if body is None:
+                continue
             pos, _quat = p.getBasePositionAndOrientation(body, physicsClientId=client)
+            start = start_positions[index]
             p.resetBasePositionAndOrientation(
-                body, (START_X + index * SPACING, RELAY_Y, pos[2]), (0.0, 0.0, 0.0, 1.0),
+                body, (start[0], start[1], pos[2]), (0.0, 0.0, 0.0, 1.0),
                 physicsClientId=client,
             )
             p.resetBaseVelocity(
@@ -248,11 +323,12 @@ def simulate(args: argparse.Namespace) -> dict:
                 physicsClientId=client,
             )
 
-        p.resetBaseVelocity(
-            mallets[0], linearVelocity=(RELAY_DIRECTION * push, 0.0, 0.0),
-            angularVelocity=(0.0, 0.0, 0.0),
-            physicsClientId=client,
-        )
+        if mallets[0] is not None:
+            p.resetBaseVelocity(
+                mallets[0], linearVelocity=(RELAY_DIRECTION * push, 0.0, 0.0),
+                angularVelocity=(0.0, 0.0, 0.0),
+                physicsClientId=client,
+            )
 
         frames = []
         # Peak speed each mallet ever reaches, and the speed each one is left
@@ -266,6 +342,15 @@ def simulate(args: argparse.Namespace) -> dict:
                     p.stepSimulation(physicsClientId=client)
             record = {"frame_index": frame_index, "time_sec": (frame_index - 1) / float(fps)}
             for index, body in enumerate(mallets):
+                if body is None:
+                    record[f"mallet_{index}"] = {
+                        "active": False,
+                        "location": list(start_positions[index]),
+                        "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0],
+                        "linear_velocity": [0.0, 0.0, 0.0],
+                        "angular_velocity": [0.0, 0.0, 0.0],
+                    }
+                    continue
                 pos, quat = p.getBasePositionAndOrientation(body, physicsClientId=client)
                 lin, ang = p.getBaseVelocity(body, physicsClientId=client)
                 speed = math.hypot(lin[0], lin[1])
@@ -273,6 +358,7 @@ def simulate(args: argparse.Namespace) -> dict:
                 if speed > 0.05:
                     started[index] = True
                 record[f"mallet_{index}"] = {
+                    "active": True,
                     "location": list(pos),
                     "quaternion_xyzw": list(quat),
                     "linear_velocity": list(lin),
@@ -312,9 +398,11 @@ def simulate(args: argparse.Namespace) -> dict:
             math.hypot(*final[f"mallet_{i}"]["linear_velocity"][:2]) for i in range(3)
         ]
         final_x = [final[f"mallet_{i}"]["location"][0] for i in range(3)]
-        # A clean relay: all three moved, each striker was left with only a few
-        # percent of its speed, and the last mallet carried most of the push.
-        relay_completed = all(started)
+        # A clean relay: every mallet still in the scene moved, each striker was
+        # left with only a few percent of its speed, and the last one carried
+        # most of the push. A removed mallet is not a failure to relay, so it is
+        # excluded rather than counted as a mallet that never started.
+        relay_completed = all(s for s, a in zip(started, active) if a)
         exchange_efficiency = peak_speed[2] / push if push else 0.0
         strikers_stopped = all(
             r is not None and r < 0.20 for r in retained_fraction
@@ -347,14 +435,20 @@ def simulate(args: argparse.Namespace) -> dict:
                 "relay_y": RELAY_Y,
             },
             "objects": {
-                "mallet_masses": [
-                    MALLET_MASS,
-                    MALLET_MASS * float(args.middle_mass_scale),
-                    MALLET_MASS,
-                ],
+                "mallet_masses": list(masses),
+                "mallet_restitutions": list(restitutions),
+                "mallet_frictions": list(frictions),
+                "mallet_active": [int(a) for a in active],
                 "push_speed": push,
-                "mallet_restitution": float(args.mallet_restitution),
-                "pair_restitution": float(args.mallet_restitution) ** 2,
+                "surface_friction": float(args.surface_friction),
+                "table_restitution": float(args.table_restitution),
+                # PyBullet multiplies the two bodies' restitutions, so the
+                # number that governs each impact is the product of the pair,
+                # not either mallet's own value.
+                "pair_restitution": [
+                    restitutions[0] * restitutions[1],
+                    restitutions[1] * restitutions[2],
+                ],
             },
             "quality": {
                 "peak_speed": peak_speed,

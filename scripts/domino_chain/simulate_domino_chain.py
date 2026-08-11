@@ -38,7 +38,51 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--floor-z", type=float, default=FLOOR_Z)
     parser.add_argument("--scene-offset-x", type=float, default=0.0)
     parser.add_argument("--scene-offset-y", type=float, default=0.0)
+
+    # ---- Per-domino overrides (the PCVE edit surface) ---------------------
+    # Each list has one entry per tile in row order (index 0 = the pushed
+    # tile). Left at None the corresponding global (--domino-mass etc.) is
+    # broadcast across the row, which reproduces the pre-PCVE behaviour.
+    parser.add_argument(
+        "--domino-masses", nargs="+", type=float, default=None,
+        help="Per-tile mass in kg, in row order (must match --domino-count).",
+    )
+    parser.add_argument(
+        "--domino-frictions-list", nargs="+", type=float, default=None,
+        help="Per-tile lateral friction, in row order (must match --domino-count).",
+    )
+    parser.add_argument(
+        "--domino-restitutions-list", nargs="+", type=float, default=None,
+        help="Per-tile restitution, in row order (must match --domino-count).",
+    )
+    parser.add_argument(
+        "--domino-active", nargs="+", type=int, default=None,
+        help="Which tiles exist, in row order. A 0 removes that tile from the "
+        "simulation entirely; its frame slot still appears in the output "
+        "(frozen at its start pose, present=false) so consumers keep a fixed "
+        "layout. Must match --domino-count.",
+    )
     return parser.parse_args()
+
+
+def _resolve_lists(args, count):
+    def broadcast(list_arg, scalar_arg, label):
+        if list_arg is None:
+            return [float(scalar_arg)] * count
+        if len(list_arg) != count:
+            raise ValueError(f"{label} must have {count} entries, got {len(list_arg)}")
+        return [float(v) for v in list_arg]
+
+    masses = broadcast(args.domino_masses, args.domino_mass, "--domino-masses")
+    frictions = broadcast(args.domino_frictions_list, args.domino_friction, "--domino-frictions-list")
+    restitutions = broadcast(args.domino_restitutions_list, args.domino_restitution, "--domino-restitutions-list")
+    if args.domino_active is None:
+        active = [True] * count
+    else:
+        if len(args.domino_active) != count:
+            raise ValueError(f"--domino-active must have {count} entries, got {len(args.domino_active)}")
+        active = [bool(int(v)) for v in args.domino_active]
+    return masses, frictions, restitutions, active
 
 
 def simulate(args: argparse.Namespace) -> dict:
@@ -59,16 +103,14 @@ def simulate(args: argparse.Namespace) -> dict:
     offset_y = float(args.scene_offset_y)
     half_height = height / 2.0
 
+    masses, frictions, restitutions, active = _resolve_lists(args, count)
+
     row_start = -(count - 1) * spacing / 2.0
     base_positions = [(row_start + i * spacing, 0.0) for i in range(count)]
     initial_locations = [
         (x + offset_x, y + offset_y, floor_z + half_height) for x, y in base_positions
     ]
 
-    # The first tile starts pre-tilted past its critical tipping angle, at
-    # rest (zero velocity) -- not kicked with an injected impulse -- so its
-    # fall from frame 1 onward is pure, unforced gravity + contact physics,
-    # exactly like every later tile's contact-triggered fall.
     identity_quat = (0.0, 0.0, 0.0, 1.0)
     push_angle_deg = float(args.push_angle_deg)
     push_quat = p.getQuaternionFromEuler((0.0, math.radians(push_angle_deg), 0.0))
@@ -113,10 +155,13 @@ def simulate(args: argparse.Namespace) -> dict:
             halfExtents=(thickness / 2.0, width / 2.0, half_height),
             physicsClientId=client,
         )
-        domino_ids = []
-        for location, orientation in zip(initial_locations, initial_orientations):
+        domino_ids: list[int | None] = []
+        for idx, (location, orientation) in enumerate(zip(initial_locations, initial_orientations)):
+            if not active[idx]:
+                domino_ids.append(None)
+                continue
             domino_id = p.createMultiBody(
-                baseMass=float(args.domino_mass),
+                baseMass=masses[idx],
                 baseCollisionShapeIndex=domino_shape,
                 baseVisualShapeIndex=-1,
                 basePosition=location,
@@ -126,10 +171,10 @@ def simulate(args: argparse.Namespace) -> dict:
             p.changeDynamics(
                 domino_id,
                 -1,
-                lateralFriction=float(args.domino_friction),
+                lateralFriction=frictions[idx],
                 spinningFriction=0.01,
                 rollingFriction=0.0005,
-                restitution=float(args.domino_restitution),
+                restitution=restitutions[idx],
                 linearDamping=0.02,
                 angularDamping=0.02,
                 physicsClientId=client,
@@ -146,15 +191,28 @@ def simulate(args: argparse.Namespace) -> dict:
 
             domino_data = []
             for idx, domino_id in enumerate(domino_ids):
+                if domino_id is None:
+                    loc = initial_locations[idx]
+                    quat = initial_orientations[idx]
+                    domino_data.append({
+                        "present": False,
+                        "location": list(loc),
+                        "quaternion_xyzw": list(quat),
+                        "linear_velocity": [0.0, 0.0, 0.0],
+                        "angular_velocity": [0.0, 0.0, 0.0],
+                        "tilt_deg": 0.0,
+                    })
+                    continue
                 dpos, dquat = p.getBasePositionAndOrientation(domino_id, physicsClientId=client)
                 dlin, dang = p.getBaseVelocity(domino_id, physicsClientId=client)
 
                 rot_matrix = p.getMatrixFromQuaternion(dquat)
-                local_z_world_z = rot_matrix[8]  # dot of local Z axis with world Z
+                local_z_world_z = rot_matrix[8]
                 tilt_deg = math.degrees(math.acos(max(-1.0, min(1.0, local_z_world_z))))
                 max_tilt_deg[idx] = max(max_tilt_deg[idx], tilt_deg)
 
                 domino_data.append({
+                    "present": True,
                     "location": list(dpos),
                     "quaternion_xyzw": list(dquat),
                     "linear_velocity": list(dlin),
@@ -168,7 +226,7 @@ def simulate(args: argparse.Namespace) -> dict:
                 "dominoes": domino_data,
             })
 
-        toppled_count = sum(1 for tilt in max_tilt_deg if tilt > 45.0)
+        toppled_count = sum(1 for i, tilt in enumerate(max_tilt_deg) if active[i] and tilt > 45.0)
 
         return {
             "schema_version": 2,
@@ -186,11 +244,12 @@ def simulate(args: argparse.Namespace) -> dict:
                     "thickness": thickness,
                     "width": width,
                     "height": height,
-                    "mass": float(args.domino_mass),
                     "initial_locations": [list(loc) for loc in initial_locations],
                     "initial_orientations_xyzw": [list(o) for o in initial_orientations],
-                    "friction": float(args.domino_friction),
-                    "restitution": float(args.domino_restitution),
+                    "masses": masses,
+                    "frictions": frictions,
+                    "restitutions": restitutions,
+                    "active": [int(a) for a in active],
                     "push_angle_deg": push_angle_deg,
                 },
                 "floor": {
@@ -217,6 +276,9 @@ def main() -> None:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     records = simulate(args)
     args.out.write_text(json.dumps(records, indent=2), encoding="utf-8")
+    q = records["quality"]
+    print(f"[sim] toppled={q['toppled_count']}/{int(args.domino_count)}  "
+          f"tilts={['%.1f' % t for t in q['max_tilt_deg_per_domino']]}")
 
 
 if __name__ == "__main__":

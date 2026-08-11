@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import math
 import random
@@ -106,7 +107,7 @@ MALLET_PICK_Z = (
     TABLE_ORIGIN[2] + (MODEL_MALLET_TOP_Z + 0.15) * TABLE_SCALE,
 )
 
-CAMERA_LENS_MM = 42.0
+CAMERA_LENS_MM = 55.0
 CAMERA_FSTOP = 4.5
 # Where along the table's length the camera looks, as a fraction of it. Short
 # of the middle on purpose: the near end of the cabinet is a metre closer to
@@ -186,7 +187,87 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mallet-restitution", type=float, default=0.95)
     parser.add_argument("--surface-friction", type=float, default=0.06)
     parser.add_argument("--middle-mass-scale", type=float, default=1.0)
+    parser.add_argument(
+        "--scenario-overrides-json",
+        type=Path,
+        default=None,
+        help="JSON file merged recursively onto the scenario built from the "
+        "flags above. This is how the PCVE suite applies a single edit: it "
+        "writes {\"physics\": {...}} touching one parameter and leaves "
+        "everything else, including the camera and the seed, identical to the "
+        "source video.",
+    )
     return parser.parse_args(argv)
+
+
+# --- Scenario ----------------------------------------------------------------
+
+def read_json(path: Path) -> dict:
+    data = json.loads(path.expanduser().read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected a JSON object: {path}")
+    return data
+
+
+def recursive_update(base: dict, updates: dict) -> dict:
+    merged = copy.deepcopy(base)
+    for key, value in updates.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = recursive_update(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+
+def create_scenario(args: argparse.Namespace) -> dict:
+    """Build the full scenario, then apply any overrides on top.
+
+    The physics block below is the baseline this scene's PCVE suite edits, and
+    must stay in sync with both simulate_air_hockey_chain.py's defaults and
+    edit_vocab.BASELINE_PHYSICS -- an edit's "from" value is read out of the
+    vocabulary, so a drift here silently mislabels every physics diff.
+    Every mallet property is a three-element list in relay order (blue, red,
+    white) so that an edit can name one disc without disturbing the others.
+    """
+    # Mirrors MALLET_MASS in simulate_air_hockey_chain.py.
+    mallet_mass = 0.120
+    scenario = {
+        "schema_version": 2,
+        "seed": int(args.seed),
+        "environment": "living_room_arcade_air_hockey",
+        "render": {
+            "fps": int(args.fps),
+            "duration_sec": float(args.duration_sec),
+            "resolution": [int(args.resolution[0]), int(args.resolution[1])],
+            "samples": int(args.samples),
+            "device": str(args.device),
+            "mode": str(args.mode),
+        },
+        "physics": {
+            "push_speed": float(args.push_speed),
+            "mallet_masses": [
+                mallet_mass,
+                mallet_mass * float(args.middle_mass_scale),
+                mallet_mass,
+            ],
+            "mallet_restitutions": [float(args.mallet_restitution)] * 3,
+            # The mallets' own friction tracks the surface's by default: the
+            # two are multiplied into one effective coefficient, and the CLI
+            # sweeps have always moved them together as a single "air cushion"
+            # dial. A PCVE edit can still move one without the other.
+            "mallet_frictions": [float(args.surface_friction)] * 3,
+            "mallet_active": [1, 1, 1],
+            "surface_friction": float(args.surface_friction),
+            "table_restitution": 0.10,
+            "gravity_z": -9.8,
+        },
+    }
+    if args.scenario_overrides_json is not None:
+        scenario = recursive_update(scenario, read_json(args.scenario_overrides_json))
+        scenario["scenario_overrides_path"] = str(
+            args.scenario_overrides_json.expanduser().resolve()
+        )
+    return scenario
 
 
 # --- Asset handling ----------------------------------------------------------
@@ -381,7 +462,9 @@ def import_table_and_mallet() -> bpy.types.Object:
     return master
 
 
-def build_mallets(master: bpy.types.Object) -> list[bpy.types.Object]:
+def build_mallets(
+    master: bpy.types.Object, active: list[int]
+) -> list[bpy.types.Object | None]:
     """Clone the extracted mallet three times and colour the copies apart.
 
     The three are geometrically identical -- that is the condition the velocity
@@ -390,9 +473,18 @@ def build_mallets(master: bpy.types.Object) -> list[bpy.types.Object]:
     disc carries the momentum, which reading three identical white discs does
     not allow. The clones each get their own mesh copy, otherwise they would
     share the master's material slots and all three take the last colour set.
+
+    A mallet a DELETE edit switched off is never cloned, so it is absent from
+    the render rather than hidden: its slot in the returned list is None and
+    every consumer skips it. The other two keep their index, colour and start
+    position, so the edit reads as "that disc is gone", not "the scene was
+    rearranged".
     """
-    mallets = []
+    mallets: list[bpy.types.Object | None] = []
     for index, (name, colour) in enumerate(MALLET_COLOURS):
+        if not int(active[index]):
+            mallets.append(None)
+            continue
         clone = master.copy()
         clone.data = master.data.copy()
         clone.name = f"mallet_{index}"
@@ -418,7 +510,7 @@ def build_mallets(master: bpy.types.Object) -> list[bpy.types.Object]:
 
 # --- Physics -----------------------------------------------------------------
 
-def run_physics(args: argparse.Namespace) -> dict:
+def run_physics(args: argparse.Namespace, scenario: dict) -> dict:
     physics_python = WORKSPACE_DIR.parent / "miniconda" / "envs" / "physics" / "bin" / "python"
     python = str(physics_python) if physics_python.exists() else (
         shutil.which("python3") or shutil.which("python")
@@ -427,17 +519,28 @@ def run_physics(args: argparse.Namespace) -> dict:
         raise RuntimeError("Cannot find python3/python for the PyBullet physics simulation.")
     script = Path(__file__).with_name("simulate_air_hockey_chain.py")
     out = args.out_dir / PHYSICS_TEMP
+    physics = scenario["physics"]
+
+    def triple(key: str) -> list[str]:
+        values = physics[key]
+        if len(values) != 3:
+            raise ValueError(f"scenario physics {key!r} must have 3 entries, got {values!r}")
+        return [str(float(v)) for v in values]
+
     subprocess.run(
         [
             python, str(script),
             "--out", str(out),
             "--fps", str(int(args.fps)),
             "--duration-sec", str(float(args.duration_sec)),
-            "--push-speed", str(float(args.push_speed)),
-            "--mallet-restitution", str(float(args.mallet_restitution)),
-            "--surface-friction", str(float(args.surface_friction)),
-            "--mallet-friction", str(float(args.surface_friction)),
-            "--middle-mass-scale", str(float(args.middle_mass_scale)),
+            "--push-speed", str(float(physics["push_speed"])),
+            "--surface-friction", str(float(physics["surface_friction"])),
+            "--table-restitution", str(float(physics["table_restitution"])),
+            "--gravity-z", str(float(physics["gravity_z"])),
+            "--mallet-masses", *triple("mallet_masses"),
+            "--mallet-restitutions", *triple("mallet_restitutions"),
+            "--mallet-frictions", *triple("mallet_frictions"),
+            "--mallet-active", *[str(int(v)) for v in physics["mallet_active"]],
         ],
         check=True,
     )
@@ -446,16 +549,20 @@ def run_physics(args: argparse.Namespace) -> dict:
     return data
 
 
-def apply_keyframes(mallets: list[bpy.types.Object], physics: dict) -> None:
+def apply_keyframes(mallets: list[bpy.types.Object | None], physics: dict) -> None:
     for record in physics["frames"]:
         frame = int(record["frame_index"])
         for index, obj in enumerate(mallets):
+            if obj is None:                      # deleted by an edit
+                continue
             data = record[f"mallet_{index}"]
             obj.location = sw(*data["location"])
             obj.rotation_quaternion = sim_quat_to_world(data["quaternion_xyzw"])
             obj.keyframe_insert(data_path="location", frame=frame)
             obj.keyframe_insert(data_path="rotation_quaternion", frame=frame)
     for obj in mallets:
+        if obj is None:
+            continue
         if obj.animation_data and obj.animation_data.action:
             for fcurve in obj.animation_data.action.fcurves:
                 for key in fcurve.keyframe_points:
@@ -500,7 +607,7 @@ def enable_gpu() -> None:
         print(f"[WARN] GPU device setup failed ({e}); Cycles will fall back.")
 
 
-def build_scene(args: argparse.Namespace, physics: dict):
+def build_scene(args: argparse.Namespace, physics: dict, scenario: dict):
     bpy.ops.wm.read_factory_settings(use_empty=True)
     scene = bpy.context.scene
     scene.render.resolution_x = args.resolution[0]
@@ -539,7 +646,7 @@ def build_scene(args: argparse.Namespace, physics: dict):
 
     join_meshes(import_glb(ROOM_GLB), "living_room")
     master = import_table_and_mallet()
-    mallets = build_mallets(master)
+    mallets = build_mallets(master, scenario["physics"]["mallet_active"])
     apply_keyframes(mallets, physics)
 
     # What the camera and the lamps are aimed at. Now that the relay is spread
@@ -639,7 +746,16 @@ def export_ground_truth(out_dir: Path, mallets, camera, physics: dict, scenario:
             "field": [TABLE_WIDTH, TABLE_LEN],
         },
         "physics": {k: v for k, v in physics.items() if k != "frames"},
-        "objects": {f"mallet_{i}": {"object_name": o.name} for i, o in enumerate(mallets)},
+        # A deleted mallet keeps its slot with present=false rather than
+        # vanishing from the mapping, so a consumer diffing an edit against its
+        # source sees three slots on both sides.
+        "objects": {
+            f"mallet_{i}": (
+                {"present": False, "object_name": None} if o is None
+                else {"present": True, "object_name": o.name}
+            )
+            for i, o in enumerate(mallets)
+        },
         "camera": {
             "object_name": camera.name,
             "lens_mm": float(camera.data.lens),
@@ -655,7 +771,11 @@ def export_ground_truth(out_dir: Path, mallets, camera, physics: dict, scenario:
         source = by_frame[frame]
         entry = {"frame_index": frame, "time_sec": (frame - 1) / float(fps)}
         for index, obj in enumerate(mallets):
+            if obj is None:
+                entry[f"mallet_{index}"] = {"present": False}
+                continue
             entry[f"mallet_{index}"] = {
+                "present": True,
                 "matrix_world": [[float(v) for v in row] for row in obj.matrix_world],
                 "linear_velocity": source[f"mallet_{index}"]["linear_velocity"],
                 "angular_velocity": source[f"mallet_{index}"]["angular_velocity"],
@@ -687,31 +807,13 @@ def main() -> None:
     random.seed(args.seed)
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    scenario = {
-        "schema_version": 1,
-        "seed": int(args.seed),
-        "environment": "living_room_arcade_air_hockey",
-        "render": {
-            "fps": int(args.fps),
-            "duration_sec": float(args.duration_sec),
-            "resolution": [int(args.resolution[0]), int(args.resolution[1])],
-            "samples": int(args.samples),
-            "device": str(args.device),
-            "mode": str(args.mode),
-        },
-        "physics_params": {
-            "push_speed": float(args.push_speed),
-            "mallet_restitution": float(args.mallet_restitution),
-            "surface_friction": float(args.surface_friction),
-            "middle_mass_scale": float(args.middle_mass_scale),
-        },
-    }
+    scenario = create_scenario(args)
     (args.out_dir / SCENARIO_METADATA_NAME).write_text(
         json.dumps(scenario, indent=2), encoding="utf-8"
     )
 
-    physics = run_physics(args)
-    mallets, camera = build_scene(args, physics)
+    physics = run_physics(args, scenario)
+    mallets, camera = build_scene(args, physics, scenario)
     export_ground_truth(args.out_dir, mallets, camera, physics, scenario)
 
     if args.mode == "preview":

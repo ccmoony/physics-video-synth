@@ -19,6 +19,8 @@ from mathutils import Vector
 WORKSPACE_DIR = Path(__file__).resolve().parents[2]
 POLYHAVEN_DIR = WORKSPACE_DIR / "assets" / "polyhaven"
 AMBIENTCG_DIR = WORKSPACE_DIR / "assets" / "ambientcg"
+MODELS_DIR = WORKSPACE_DIR / "assets" / "models"
+BALL_GLB_PATH = MODELS_DIR / "basketball_and1_xcelerate.glb"
 
 OUTPUT_STEM = "bouncing_ball"
 DIRECT_MP4_NAME = f"{OUTPUT_STEM}.mp4"
@@ -696,37 +698,63 @@ def create_floor(scenario: dict[str, object]) -> bpy.types.Object:
 
 
 def add_ball(radius: float, location: tuple[float, float, float], scenario: dict[str, object]) -> bpy.types.Object:
-    ball_mat = create_rubber_ball_material(scenario)
-    seam_mat = create_ball_seam_material()
-    bpy.ops.mesh.primitive_uv_sphere_add(
-        segments=96,
-        ring_count=48,
-        radius=radius,
-        location=location,
-    )
-    ball = bpy.context.object
+    """Import the basketball GLB, rescale it to `radius`, and place it.
+
+    The GLB carries its own material (orange rubber with grooves and lines);
+    the procedural rubber/seam/scuff pipeline that used to build the ball
+    from primitives is no longer applied -- keeping the GLB's authored look
+    is the whole point of switching to it.
+    """
+    if not BALL_GLB_PATH.exists():
+        raise FileNotFoundError(f"Basketball model missing: {BALL_GLB_PATH}")
+
+    before = set(bpy.context.scene.objects)
+    bpy.ops.import_scene.gltf(filepath=str(BALL_GLB_PATH))
+    imported = [obj for obj in bpy.context.scene.objects if obj not in before]
+    meshes = [obj for obj in imported if obj.type == "MESH"]
+    empties = [obj for obj in imported if obj.type != "MESH"]
+    if not meshes:
+        raise RuntimeError(f"No mesh found in {BALL_GLB_PATH}")
+
+    # Bake the glTF parent transforms into vertex data and join into one
+    # object so the bounding box tells us the true world-space diameter.
+    bpy.ops.object.select_all(action="DESELECT")
+    for obj in meshes:
+        obj.select_set(True)
+    bpy.context.view_layer.objects.active = meshes[0]
+    bpy.ops.object.parent_clear(type="CLEAR_KEEP_TRANSFORM")
+    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    if len(meshes) > 1:
+        bpy.ops.object.join()
+    ball = bpy.context.view_layer.objects.active
     ball.name = "bouncing_ball"
-    ball.data.materials.append(ball_mat)
+
+    # Drop the empties the glTF importer left behind.
+    for empty in empties:
+        leftover = bpy.data.objects.get(empty.name)
+        if leftover is not None and leftover is not ball:
+            bpy.data.objects.remove(leftover, do_unlink=True)
+
+    # Uniform rescale so the mesh's largest dimension matches the physics
+    # radius (2 * radius across).
+    max_dim = max(ball.dimensions)
+    if max_dim <= 0.0:
+        raise RuntimeError(f"Basketball mesh has zero dimension: {ball.dimensions}")
+    scale = (2.0 * radius) / max_dim
+    ball.scale = (scale, scale, scale)
+    bpy.ops.object.select_all(action="DESELECT")
+    ball.select_set(True)
+    bpy.context.view_layer.objects.active = ball
+    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+
+    # Recentre the origin on the bounding-box centre so location is the
+    # ball's true world centre -- the physics keyframes assume that.
+    bpy.ops.object.origin_set(type="ORIGIN_GEOMETRY", center="BOUNDS")
+
+    ball.location = location
+    ball.rotation_mode = "QUATERNION"
+    ball.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
     bpy.ops.object.shade_smooth()
-
-    for name, rotation in BALL_SEAMS:
-        bpy.ops.mesh.primitive_torus_add(
-            major_radius=radius * 1.005,
-            minor_radius=radius * 0.012,
-            major_segments=144,
-            minor_segments=8,
-            location=ball.location,
-            rotation=rotation,
-        )
-        seam = bpy.context.object
-        seam.name = name
-        seam.data.materials.append(seam_mat)
-        seam.parent = ball
-        seam.matrix_parent_inverse.identity()
-        seam.location = (0.0, 0.0, 0.0)
-        seam.rotation_euler = rotation
-
-    add_ball_surface_scuffs(ball, radius, scenario)
     return ball
 
 

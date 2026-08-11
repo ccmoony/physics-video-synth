@@ -42,8 +42,13 @@ discs make the handoff unreadable.
   the table, places the table, extracts and recolours the mallets, runs the
   simulation, applies the trajectory as keyframes, lights the room and renders.
 - `batch_render_air_hockey_chain.py` – orchestrates multiple randomized renders.
-- `build_pcve_air_hockey_chain.py` – builds the PCVE suite (does the relay
-  behave like a velocity swap, or not?).
+- `edit_vocab.py` – this scene's PCVE edit vocabulary: which objects and
+  properties may be edited, how each maps to a simulator parameter, and the
+  baseline physics values. Must stay in sync with
+  `render_air_hockey_chain.create_scenario()`.
+- `build_pcve_air_hockey_chain.py` – builds the PCVE suite: one source video
+  plus one variant per edit-DSL string (does the relay behave like a velocity
+  swap, or not?).
 
 ## Quick start
 
@@ -140,18 +145,66 @@ python scripts/air_hockey_chain/build_pcve_air_hockey_chain.py \
   --device auto
 ```
 
-The suite holds the layout and the mallets fixed and breaks, one at a time, the
-three properties the relay rests on. Every outcome is verified against the
-simulator and matches the closed-form 1-D prediction
+The suite is one source video plus N edited variants. Every edit is declared as
+a **single edit-DSL string** in `EDIT_CASES`, and the natural-language prompts
+(vague + quantitative, zh + en), the scenario overrides handed to the renderer,
+and the manifest's `physics_diff` are all derived from that one string by
+`scripts/pcve_edit_dsl.py` against this scene's `edit_vocab.py`. Nothing about
+the edit is written twice, so a prompt cannot drift from the physics it
+describes.
+
+An edit may only **delete one object** or **set one scalar property** on one
+object. The layout, the camera, the seed and the lighting are identical across
+every case, so the only thing that varies in the frame is the motion.
+
+Editable objects are `blue_mallet` / `red_mallet` / `white_mallet` (the relay
+order) only. The table itself is deliberately **not** editable: an edit names
+a moving object, not the surface it slides on. Since Bullet multiplies the
+pair, raising one mallet's friction to 1.5 gives exactly the effective 0.09
+that raising the table's would (verified identical to the millimetre).
+Editable properties are `mass`, `restitution`, `friction`, and
+`initial_velocity` on the blue mallet -- the only disc with a non-zero
+baseline velocity, so the only one where a scalar speed has a direction to
+scale.
+
+Every value below was chosen by sweeping `simulate_air_hockey_chain.py`
+directly, not guessed, and the outcomes match the closed-form 1-D prediction
 `v1' = v1(m1 - e·m2)/(m1 + m2)`, `v2' = v1·m1(1 + e)/(m1 + m2)`.
 
-| case_id | knob | outcome |
+| case_id | edit_dsl | outcome |
 |---|---|---|
-| `air_hockey_chain_baseline` | – | Each striker stops dead (keeps 3%/4%); white carries 88% of the push into the near rail. |
-| `air_hockey_chain_heavy_middle` | `middle_mass_scale 4.0` | Blue **rebounds backwards** at half its speed instead of stopping; red leaves with 0.30 m/s, so only 31% gets through. |
-| `air_hockey_chain_dead_faces` | `mallet_restitution 0.35` | Each impact becomes a shove: the striker keeps ~41% and slides on behind its target, all three finishing bunched together. |
-| `air_hockey_chain_no_air_cushion` | `surface_friction 0.5` | Blue stops after 13 cm. **No collision happens at all** -- the near-frictionless surface is what makes the relay possible. |
-| `air_hockey_chain_soft_push` | `push_speed 0.3` | Collisions still clean, but red runs out of table before white. The chain dies one link short. |
+| `air_hockey_chain_baseline` | – (source) | Each striker stops dead (keeps 3%/4%); white carries 88% of the push into the near rail. |
+| `edit_heavy_middle_mallet` | `SET red_mallet.mass FROM 0.12 TO 0.48` | Blue **rebounds backwards** up the table instead of stopping; red leaves with 0.30 m/s, so only 31% gets through. |
+| `edit_heavy_last_mallet` | `SET white_mallet.mass FROM 0.12 TO 1.2` | First handoff untouched, second one fails: red bounces back off white, which only creeps forward at 0.13 m/s. |
+| `edit_heavy_striker` | `SET blue_mallet.mass FROM 0.12 TO 1.2` | Blue keeps 80% and drives on behind red; red leaves at 1.37 m/s, faster than the 0.8 m/s push. All three finish bunched at the near rail. |
+| `edit_dead_striker_face` | `SET blue_mallet.restitution FROM 0.95 TO 0.35` | The **first** impact becomes a shove (pair restitution 0.33): blue keeps 35% and slides on behind red. The second handoff is unchanged. |
+| `edit_grippy_striker` | `SET blue_mallet.friction FROM 0.06 TO 1.5` | Effective coefficient 0.0036 -> 0.09. Blue stops after 36 cm. **No collision happens at all** -- the disc riding on almost nothing is what makes the relay possible. Red and white still glide. |
+| `edit_soft_push` | `SET blue_mallet.initial_velocity FROM 0.8 TO 0.3` | Collisions still clean, but red stops 24 cm short of white. The chain dies one link short. |
+| `edit_remove_middle_mallet` | `DELETE red_mallet` | Blue coasts the empty middle and strikes white directly. One handoff instead of two, and a cleaner one: white gets 90%. |
+| `edit_remove_last_mallet` | `DELETE white_mallet` | First handoff identical to the baseline, then red runs the rest of the table into the near rail unobstructed. |
+
+Because PyBullet **multiplies** the two bodies' restitutions (and their
+frictions), setting one mallet's value changes only the impacts that mallet is
+part of: blue's governs the first handoff, white's the second, red's both. That
+is what makes `edit_dead_striker_face` a one-object edit rather than a global
+one, and it is why the prompt's number (0.35) is not the number that governs
+the collision (0.33).
+
+Adding or changing an edit:
+
+```bash
+# 1. sweep the sim directly first -- no Blender, no rendering
+python scripts/air_hockey_chain/simulate_air_hockey_chain.py \
+  --out /tmp/s.json --mallet-masses 0.12 0.48 0.12
+# 2. add an EditCase to EDIT_CASES, then check what it generates
+python scripts/air_hockey_chain/build_pcve_air_hockey_chain.py \
+  --dry-run --out-root /tmp/dryrun
+# 3. render only what is new; --clean-stale-cases rm -rf's dropped cases
+python scripts/air_hockey_chain/build_pcve_air_hockey_chain.py --skip-existing
+```
+
+`--skip-existing` still rewrites `prompts.json` and the manifest, so edits to
+prompt wording or an `edit_summary` do not cost a re-render.
 
 ## Scene layout
 

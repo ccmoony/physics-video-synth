@@ -44,9 +44,13 @@ GROUND_DEPTH = 0.5           # how far the floor slab reaches below its top face
 # act on the ball are the floor's rolling resistance, the chest, and the other
 # ball.
 #
-# The floorboards stop here -- the set is a corner, with a west wall, a south
-# wall and two open sides. A ball that runs past this is rolling over nothing at
-# all, so it is a hard failure rather than a note.
+# The extent of the room the set is actually dressed for -- a corner, with a
+# west wall, a south wall and two open sides. This is NOT the edge of the
+# rendered floor: render_ball_box_rebound.py hides the model's own floorboard
+# quad and lays in a 9 m tiling hardwood plane, so a ball past this line is
+# still on solid, rendered floor. What it has left is the framed set, and at
+# this camera it is on its way out of shot -- which is worth a note, not a
+# failure.
 FLOOR_X = (-1.892, 1.221)
 FLOOR_Y = (-1.252, 1.348)
 
@@ -111,6 +115,19 @@ def parse_args() -> argparse.Namespace:
         "multiplies in the *mat's lateral* friction instead and turns the roll "
         "into a skid. With the ball at rf = 0 and lateral friction 1.0 the "
         "effective rolling resistance is exactly the mat's own value.",
+    )
+
+    parser.add_argument(
+        "--ball-a-rolling-friction", type=float, default=None,
+        help="Rolling resistance carried by the rolling ball itself, rather "
+        "than by the floor. Defaults to --ball-rolling-friction. Note the "
+        "combination rule above: this is multiplied by the *floor's lateral* "
+        "friction, so an effective resistance of 0.030 (against the floor's own "
+        "0.006 baseline) wants roughly 0.04 here, not 0.030.",
+    )
+    parser.add_argument(
+        "--ball-b-rolling-friction", type=float, default=None,
+        help="Same, for the target ball. Defaults to --ball-rolling-friction.",
     )
 
     # --- the target ball ---
@@ -301,15 +318,21 @@ def simulate(args: argparse.Namespace) -> dict:
         props_id = None
         if args.props_collider is not None:
             props_id = add_room(client, args.props_collider, 0.75, 0.15)
+        # Per-ball rolling resistance, falling back to the shared knob so the
+        # existing defaults and every existing caller are unchanged.
+        shared_rf = float(args.ball_rolling_friction)
+        rf_a = shared_rf if args.ball_a_rolling_friction is None else float(args.ball_a_rolling_friction)
+        rf_b = shared_rf if args.ball_b_rolling_friction is None else float(args.ball_b_rolling_friction)
+
         ball_a = add_ball(client, r_a, float(args.ball_a_mass), ball_a_start,
                           float(args.ball_a_friction), float(args.ball_a_restitution),
-                          float(args.ball_rolling_friction),
+                          rf_a,
                           float(args.ball_spinning_friction))
         ball_b = None
         if not args.disable_ball_b:
             ball_b = add_ball(client, r_b, float(args.ball_b_mass), ball_b_start,
                               float(args.ball_b_friction), float(args.ball_b_restitution),
-                              float(args.ball_rolling_friction),
+                              rf_b,
                               float(args.ball_spinning_friction))
 
         p.resetBaseVelocity(ball_a, linearVelocity=velocity, angularVelocity=spin,
@@ -489,6 +512,7 @@ def simulate(args: argparse.Namespace) -> dict:
                     "initial_location": list(ball_b_start),
                     "restitution": float(args.ball_b_restitution),
                     "friction": float(args.ball_b_friction),
+                    "rolling_friction": rf_b,
                 },
                 "chest": {
                     "collider": str(args.chest_collider),

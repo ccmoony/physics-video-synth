@@ -204,6 +204,25 @@ def create_scenario(args: argparse.Namespace) -> dict[str, object]:
             },
             "physics": {
                 "ball_radius": 0.05715,
+                # Per-ball fields (the PCVE edit surface). Two identical
+                # billiard balls at baseline; an edit names one of them and
+                # writes at its slot. The globals (ball_*) below stay as
+                # fallbacks for callers that do not care about per-ball
+                # control -- if the per-ball value is None the sim uses the
+                # global.
+                "cue_mass": 0.17,
+                "cue_friction": 0.15,
+                "cue_restitution": 0.90,
+                "cue_rolling_friction": 0.02,
+                "cue_spinning_friction": 0.02,
+                "target_mass": 0.17,
+                "target_friction": 0.15,
+                "target_restitution": 0.90,
+                "target_rolling_friction": 0.02,
+                "target_spinning_friction": 0.02,
+                # Two-slot presence list, in fixed order (cue, target). A
+                # PCVE DELETE edit writes 0 at the ball's slot.
+                "active": [1, 1],
                 "ball_mass": 0.17,
                 "ball_friction": 0.15,
                 "ball_restitution": 0.90,
@@ -323,6 +342,18 @@ def run_physics_simulation(
             str(cue_vel[1]),
             "--cue-vz",
             str(cue_vel[2]),
+            "--cue-mass",           str(float(physics["cue_mass"])),
+            "--cue-friction",       str(float(physics["cue_friction"])),
+            "--cue-restitution",    str(float(physics["cue_restitution"])),
+            "--cue-rolling-friction",   str(float(physics["cue_rolling_friction"])),
+            "--cue-spinning-friction",  str(float(physics["cue_spinning_friction"])),
+            "--target-mass",        str(float(physics["target_mass"])),
+            "--target-friction",    str(float(physics["target_friction"])),
+            "--target-restitution", str(float(physics["target_restitution"])),
+            "--target-rolling-friction",  str(float(physics["target_rolling_friction"])),
+            "--target-spinning-friction", str(float(physics["target_spinning_friction"])),
+            "--cue-active",    str(int(physics["active"][0])),
+            "--target-active", str(int(physics["active"][1])),
         ],
         check=True,
     )
@@ -493,6 +524,15 @@ def build_scene(
     cue_obj.location = (float(cue_loc[0]), float(cue_loc[1]), surface_z + ball_radius + float(cue_loc[2]))
     target_obj.location = (float(target_loc[0]), float(target_loc[1]), surface_z + ball_radius + float(target_loc[2]))
 
+    # DELETE edit: hide the removed ball from render and viewport.
+    active = physics.get("active", [1, 1])
+    if not int(active[0]):
+        cue_obj.hide_viewport = True
+        cue_obj.hide_render = True
+    if not int(active[1]):
+        target_obj.hide_viewport = True
+        target_obj.hide_render = True
+
     # Update scenario with the actual values used for physics and rendering.
     physics["ball_radius"] = ball_radius
     physics["surface_z"] = surface_z
@@ -513,35 +553,49 @@ def apply_physics_animation(
     target_ball: bpy.types.Object,
     physics: dict,
 ) -> None:
-    for obj in (cue_ball, target_ball):
-        obj.rotation_mode = "QUATERNION"
+    # A hidden ball (DELETE edit) does not need keyframes -- its frozen
+    # position was already set in build_scene. Skip animating it.
+    animate_cue = not bool(cue_ball.hide_render)
+    animate_target = not bool(target_ball.hide_render)
+
+    if animate_cue:
+        cue_ball.rotation_mode = "QUATERNION"
+    if animate_target:
+        target_ball.rotation_mode = "QUATERNION"
 
     for frame_record in physics["frames"]:
         frame = int(frame_record["frame_index"])
 
-        cue_quat = frame_record["cue_ball_quaternion_xyzw"]
-        cue_ball.location = frame_record["cue_ball_location"]
-        cue_ball.rotation_quaternion = (
-            cue_quat[3],
-            cue_quat[0],
-            cue_quat[1],
-            cue_quat[2],
-        )
-        cue_ball.keyframe_insert(data_path="location", frame=frame)
-        cue_ball.keyframe_insert(data_path="rotation_quaternion", frame=frame)
+        if animate_cue:
+            cue_quat = frame_record["cue_ball_quaternion_xyzw"]
+            cue_ball.location = frame_record["cue_ball_location"]
+            cue_ball.rotation_quaternion = (
+                cue_quat[3],
+                cue_quat[0],
+                cue_quat[1],
+                cue_quat[2],
+            )
+            cue_ball.keyframe_insert(data_path="location", frame=frame)
+            cue_ball.keyframe_insert(data_path="rotation_quaternion", frame=frame)
 
-        target_quat = frame_record["target_ball_quaternion_xyzw"]
-        target_ball.location = frame_record["target_ball_location"]
-        target_ball.rotation_quaternion = (
-            target_quat[3],
-            target_quat[0],
-            target_quat[1],
-            target_quat[2],
-        )
-        target_ball.keyframe_insert(data_path="location", frame=frame)
-        target_ball.keyframe_insert(data_path="rotation_quaternion", frame=frame)
+        if animate_target:
+            target_quat = frame_record["target_ball_quaternion_xyzw"]
+            target_ball.location = frame_record["target_ball_location"]
+            target_ball.rotation_quaternion = (
+                target_quat[3],
+                target_quat[0],
+                target_quat[1],
+                target_quat[2],
+            )
+            target_ball.keyframe_insert(data_path="location", frame=frame)
+            target_ball.keyframe_insert(data_path="rotation_quaternion", frame=frame)
 
-    set_linear_keyframes([cue_ball, target_ball])
+    animated = []
+    if animate_cue:
+        animated.append(cue_ball)
+    if animate_target:
+        animated.append(target_ball)
+    set_linear_keyframes(animated)
 
 
 def export_ground_truth(
@@ -568,10 +622,12 @@ def export_ground_truth(
         "physics": {key: value for key, value in physics.items() if key != "frames"},
         "objects": {
             "cue_ball": {
+                "present": not bool(cue_ball.hide_render),
                 "object_name": cue_ball.name,
                 "radius_m_scene_units": ball_radius,
             },
             "target_ball": {
+                "present": not bool(target_ball.hide_render),
                 "object_name": target_ball.name,
                 "radius_m_scene_units": ball_radius,
             },

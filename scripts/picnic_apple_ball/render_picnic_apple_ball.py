@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import math
 import random
@@ -79,7 +80,81 @@ def parse_args() -> argparse.Namespace:
         help="Ground lateral friction forwarded to the physics sim; controls how "
         "far the struck ball rolls before stopping. None keeps the sim default.",
     )
+    parser.add_argument(
+        "--scenario-overrides-json",
+        type=Path,
+        default=None,
+        help="JSON file merged recursively onto the scenario built from the flags "
+        "above. This is how the PCVE suite applies a single edit: it writes "
+        "{\"physics\": {...}} touching one parameter and leaves everything else, "
+        "including the camera and the seed, identical to the source video.",
+    )
     return parser.parse_args(argv)
+
+
+# --- Scenario ----------------------------------------------------------------
+
+def read_json(path: Path) -> dict:
+    data = json.loads(path.expanduser().read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected a JSON object: {path}")
+    return data
+
+
+def recursive_update(base: dict, updates: dict) -> dict:
+    merged = copy.deepcopy(base)
+    for key, value in updates.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = recursive_update(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+
+def create_scenario(args: argparse.Namespace) -> dict:
+    """Build the full scenario, then apply any overrides on top.
+
+    The physics block below is the baseline this scene's PCVE suite edits
+    and must stay in sync with both simulate_picnic_apple_ball.py's defaults
+    and edit_vocab.BASELINE_PHYSICS.
+    """
+    scenario = {
+        "schema_version": 2,
+        "seed": int(args.seed),
+        "environment": "outdoor_picnic",
+        "render": {
+            "fps": int(args.fps),
+            "duration_sec": float(args.duration_sec),
+            "resolution": [int(args.resolution[0]), int(args.resolution[1])],
+            "samples": int(args.samples),
+            "device": str(args.device),
+            "mode": str(args.mode),
+        },
+        "physics": {
+            "ball_mass": 0.43,
+            "ball_friction": 0.25,
+            "ball_rolling_friction": 0.015,
+            "ball_spinning_friction": 0.01,
+            "ball_restitution": 0.35,
+            "apple_mass": 0.15,
+            "apple_friction": 0.5,
+            "apple_restitution": 0.25,
+            # Two-slot presence list, in fixed order (apple, ball). A PCVE
+            # DELETE edit writes 0 at the object's slot.
+            "active": [1, 1],
+            "grass_friction": (0.25 if args.grass_friction is None else float(args.grass_friction)),
+            "drop_height": float(args.drop_height),
+            "apple_offset_x": float(args.apple_offset_x),
+            "apple_offset_y": 0.0,
+            "gravity_z": -9.8,
+        },
+    }
+    if args.scenario_overrides_json is not None:
+        scenario = recursive_update(scenario, read_json(args.scenario_overrides_json))
+        scenario["scenario_overrides_path"] = str(
+            args.scenario_overrides_json.expanduser().resolve()
+        )
+    return scenario
 
 
 def world_bbox(obj: bpy.types.Object) -> tuple[Vector, Vector]:
@@ -419,23 +494,35 @@ def create_grass_ground(size: float, subdiv: int, density: int) -> bpy.types.Obj
 
 # --- Physics ------------------------------------------------------------------
 
-def run_physics(args: argparse.Namespace) -> dict:
+def run_physics(args: argparse.Namespace, scenario: dict) -> dict:
     physics_python = WORKSPACE_DIR.parent / "miniconda" / "envs" / "physics" / "bin" / "python"
     python = str(physics_python) if physics_python.exists() else (shutil.which("python3") or shutil.which("python"))
     if not python:
         raise RuntimeError("Cannot find python3/python for the PyBullet physics simulation.")
     script = Path(__file__).with_name("simulate_picnic_apple_ball.py")
     out = args.out_dir / PHYSICS_TEMP
+    physics = scenario["physics"]
     command = [
         python, str(script),
         "--out", str(out),
         "--fps", str(int(args.fps)),
         "--duration-sec", str(float(args.duration_sec)),
-        "--drop-height", str(float(args.drop_height)),
-        "--apple-offset-x", str(float(args.apple_offset_x)),
+        "--drop-height", str(float(physics["drop_height"])),
+        "--apple-offset-x", str(float(physics["apple_offset_x"])),
+        "--apple-offset-y", str(float(physics["apple_offset_y"])),
+        "--grass-friction", str(float(physics["grass_friction"])),
+        "--ball-mass", str(float(physics["ball_mass"])),
+        "--ball-friction", str(float(physics["ball_friction"])),
+        "--ball-rolling-friction", str(float(physics["ball_rolling_friction"])),
+        "--ball-spinning-friction", str(float(physics["ball_spinning_friction"])),
+        "--ball-restitution", str(float(physics["ball_restitution"])),
+        "--apple-mass", str(float(physics["apple_mass"])),
+        "--apple-friction", str(float(physics["apple_friction"])),
+        "--apple-restitution", str(float(physics["apple_restitution"])),
+        "--gravity-z", str(float(physics["gravity_z"])),
+        "--apple-active", str(int(physics["active"][0])),
+        "--ball-active",  str(int(physics["active"][1])),
     ]
-    if args.grass_friction is not None:
-        command += ["--grass-friction", str(float(args.grass_friction))]
     subprocess.run(command, check=True)
     data = json.loads(out.read_text(encoding="utf-8"))
     out.unlink(missing_ok=True)
@@ -461,7 +548,7 @@ def normalize_frames(physics: dict) -> list:
 
 # --- Scene ---------------------------------------------------------------
 
-def build_scene(args: argparse.Namespace, physics: dict) -> tuple[bpy.types.Object, bpy.types.Object, bpy.types.Object]:
+def build_scene(args: argparse.Namespace, physics: dict, scenario: dict) -> tuple:
     bpy.ops.wm.read_factory_settings(use_empty=True)
     scene = bpy.context.scene
     scene.render.resolution_x = args.resolution[0]
@@ -540,13 +627,23 @@ def build_scene(args: argparse.Namespace, physics: dict) -> tuple[bpy.types.Obje
         math.cos(math.radians(PICNIC_YAW_DEG) / 2.0), 0.0, 0.0, math.sin(math.radians(PICNIC_YAW_DEG) / 2.0),
     )
 
-    # Physics-driven props
+    # Physics-driven props. A DELETE edit sets active=0 on one side and we
+    # simply skip importing that GLB; the other slot still gets animated
+    # from the sim frames.
     frames = normalize_frames(physics)
-    soccer_ball = import_glb_group(SOCCER_BALL_GLB, "soccer_ball", BALL_DIAMETER, origin="center")
-    apply_keyframes(soccer_ball, frames, "soccer_ball")
+    active = scenario["physics"]["active"]
+    apple_active = bool(int(active[0]))
+    ball_active = bool(int(active[1]))
 
-    apple = import_glb_group(APPLE_GLB, "apple", APPLE_DIAMETER, ref_axes=("x", "z"), origin="center")
-    apply_keyframes(apple, frames, "apple")
+    soccer_ball = None
+    if ball_active:
+        soccer_ball = import_glb_group(SOCCER_BALL_GLB, "soccer_ball", BALL_DIAMETER, origin="center")
+        apply_keyframes(soccer_ball, frames, "soccer_ball")
+
+    apple = None
+    if apple_active:
+        apple = import_glb_group(APPLE_GLB, "apple", APPLE_DIAMETER, ref_axes=("x", "z"), origin="center")
+        apply_keyframes(apple, frames, "apple")
 
     frame_end = int(physics["frame_end"])
     scene.frame_start = 1
@@ -560,13 +657,22 @@ def export_ground_truth(out_dir: Path, soccer_ball, apple, camera, physics: dict
     scene = bpy.context.scene
     fps = int(physics["fps"])
     frame_end = int(physics["frame_end"])
+
+    def obj_entry(obj):
+        if obj is None:
+            return {"present": False, "object_name": None}
+        return {"present": True, "object_name": obj.name}
+
     records = {
         "schema_version": 1,
         "fps": fps,
         "frame_start": 1,
         "frame_end": frame_end,
         "physics": {k: v for k, v in physics.items() if k != "frames"},
-        "objects": {"soccer_ball": {"object_name": soccer_ball.name}, "apple": {"object_name": apple.name}},
+        "objects": {
+            "soccer_ball": obj_entry(soccer_ball),
+            "apple": obj_entry(apple),
+        },
         "camera": {
             "object_name": camera.name,
             "lens_mm": float(camera.data.lens),
@@ -577,22 +683,25 @@ def export_ground_truth(out_dir: Path, soccer_ball, apple, camera, physics: dict
         "frames": [],
     }
     physics_by_frame = {int(fr["frame_index"]): fr for fr in physics["frames"]}
+
+    def frame_entry(obj, pf_entry):
+        if obj is None:
+            return {"present": False}
+        return {
+            "present": True,
+            "matrix_world": [[float(v) for v in row] for row in obj.matrix_world],
+            "linear_velocity": pf_entry["linear_velocity"],
+            "angular_velocity": pf_entry["angular_velocity"],
+        }
+
     for frame in range(1, frame_end + 1):
         scene.frame_set(frame)
         pf = physics_by_frame[frame]
         records["frames"].append({
             "frame_index": frame,
             "time_sec": (frame - 1) / float(fps),
-            "soccer_ball": {
-                "matrix_world": [[float(v) for v in row] for row in soccer_ball.matrix_world],
-                "linear_velocity": pf["soccer_ball"]["linear_velocity"],
-                "angular_velocity": pf["soccer_ball"]["angular_velocity"],
-            },
-            "apple": {
-                "matrix_world": [[float(v) for v in row] for row in apple.matrix_world],
-                "linear_velocity": pf["apple"]["linear_velocity"],
-                "angular_velocity": pf["apple"]["angular_velocity"],
-            },
+            "soccer_ball": frame_entry(soccer_ball, pf["soccer_ball"]),
+            "apple": frame_entry(apple, pf["apple"]),
             "camera_matrix_world": [[float(v) for v in row] for row in camera.matrix_world],
         })
     (out_dir / GROUND_TRUTH_NAME).write_text(json.dumps(records, indent=2), encoding="utf-8")
@@ -618,27 +727,11 @@ def main() -> None:
     random.seed(args.seed)
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    scenario = {
-        "schema_version": 1,
-        "seed": int(args.seed),
-        "render": {
-            "fps": int(args.fps),
-            "duration_sec": float(args.duration_sec),
-            "resolution": [int(args.resolution[0]), int(args.resolution[1])],
-            "samples": int(args.samples),
-            "device": str(args.device),
-            "mode": str(args.mode),
-        },
-        "physics_params": {
-            "drop_height": float(args.drop_height),
-            "apple_offset_x": float(args.apple_offset_x),
-            "grass_friction": (None if args.grass_friction is None else float(args.grass_friction)),
-        },
-    }
+    scenario = create_scenario(args)
     (args.out_dir / SCENARIO_METADATA_NAME).write_text(json.dumps(scenario, indent=2), encoding="utf-8")
 
-    physics = run_physics(args)
-    soccer_ball, apple, camera = build_scene(args, physics)
+    physics = run_physics(args, scenario)
+    soccer_ball, apple, camera = build_scene(args, physics, scenario)
     export_ground_truth(args.out_dir, soccer_ball, apple, camera, physics, scenario)
 
     if args.mode == "preview":

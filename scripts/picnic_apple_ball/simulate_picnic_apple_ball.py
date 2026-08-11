@@ -54,6 +54,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--apple-drift-x", type=float, default=0.0)
     parser.add_argument("--apple-drift-y", type=float, default=0.0)
     parser.add_argument("--gravity-z", type=float, default=-9.8)
+    # Per-object active flags for PCVE DELETE edits. A 0 removes that body
+    # from the simulation entirely; its frame slot still appears in the
+    # output (frozen at its start pose, present=false) so downstream
+    # consumers keep a fixed two-object layout.
+    parser.add_argument("--apple-active", type=int, default=1)
+    parser.add_argument("--ball-active", type=int, default=1)
     return parser.parse_args()
 
 
@@ -97,81 +103,107 @@ def simulate(args: argparse.Namespace) -> dict:
             physicsClientId=client,
         )
 
-        ball_shape = p.createCollisionShape(p.GEOM_SPHERE, radius=BALL_RADIUS, physicsClientId=client)
-        ball_id = p.createMultiBody(
-            baseMass=float(args.ball_mass),
-            baseCollisionShapeIndex=ball_shape,
-            baseVisualShapeIndex=-1,
-            basePosition=ball_start,
-            physicsClientId=client,
-        )
-        p.changeDynamics(
-            ball_id,
-            -1,
-            lateralFriction=float(args.ball_friction),
-            spinningFriction=float(args.ball_spinning_friction),
-            rollingFriction=float(args.ball_rolling_friction),
-            restitution=float(args.ball_restitution),
-            linearDamping=0.0,
-            angularDamping=0.02,
-            collisionMargin=0.0005,
-            physicsClientId=client,
-        )
+        ball_active = bool(int(args.ball_active))
+        apple_active = bool(int(args.apple_active))
 
-        apple_shape = p.createCollisionShape(p.GEOM_SPHERE, radius=APPLE_RADIUS, physicsClientId=client)
-        apple_id = p.createMultiBody(
-            baseMass=float(args.apple_mass),
-            baseCollisionShapeIndex=apple_shape,
-            baseVisualShapeIndex=-1,
-            basePosition=apple_start,
-            physicsClientId=client,
-        )
-        p.resetBaseVelocity(
-            apple_id, linearVelocity=apple_initial_velocity, angularVelocity=(0.0, 0.0, 0.0),
-            physicsClientId=client,
-        )
-        p.changeDynamics(
-            apple_id,
-            -1,
-            lateralFriction=float(args.apple_friction),
-            spinningFriction=0.01,
-            rollingFriction=0.01,
-            restitution=float(args.apple_restitution),
-            linearDamping=0.0,
-            angularDamping=0.05,
-            collisionMargin=0.0005,
-            physicsClientId=client,
-        )
+        ball_id = None
+        if ball_active:
+            ball_shape = p.createCollisionShape(p.GEOM_SPHERE, radius=BALL_RADIUS, physicsClientId=client)
+            ball_id = p.createMultiBody(
+                baseMass=float(args.ball_mass),
+                baseCollisionShapeIndex=ball_shape,
+                baseVisualShapeIndex=-1,
+                basePosition=ball_start,
+                physicsClientId=client,
+            )
+            p.changeDynamics(
+                ball_id,
+                -1,
+                lateralFriction=float(args.ball_friction),
+                spinningFriction=float(args.ball_spinning_friction),
+                rollingFriction=float(args.ball_rolling_friction),
+                restitution=float(args.ball_restitution),
+                linearDamping=0.0,
+                angularDamping=0.02,
+                collisionMargin=0.0005,
+                physicsClientId=client,
+            )
+
+        apple_id = None
+        if apple_active:
+            apple_shape = p.createCollisionShape(p.GEOM_SPHERE, radius=APPLE_RADIUS, physicsClientId=client)
+            apple_id = p.createMultiBody(
+                baseMass=float(args.apple_mass),
+                baseCollisionShapeIndex=apple_shape,
+                baseVisualShapeIndex=-1,
+                basePosition=apple_start,
+                physicsClientId=client,
+            )
+            p.resetBaseVelocity(
+                apple_id, linearVelocity=apple_initial_velocity, angularVelocity=(0.0, 0.0, 0.0),
+                physicsClientId=client,
+            )
+            p.changeDynamics(
+                apple_id,
+                -1,
+                lateralFriction=float(args.apple_friction),
+                spinningFriction=0.01,
+                rollingFriction=0.01,
+                restitution=float(args.apple_restitution),
+                linearDamping=0.0,
+                angularDamping=0.05,
+                collisionMargin=0.0005,
+                physicsClientId=client,
+            )
 
         frames = []
         ball_start_xy = (ball_x, ball_y)
         ball_roll_distance = 0.0
         min_apple_ball_gap = float("inf")
 
+        identity_quat = [0.0, 0.0, 0.0, 1.0]
+        zero_vec = [0.0, 0.0, 0.0]
         for frame_index in range(1, frame_end + 1):
             if frame_index > 1:
                 for _ in range(substeps):
                     p.stepSimulation(physicsClientId=client)
 
-            ball_pos, ball_quat = p.getBasePositionAndOrientation(ball_id, physicsClientId=client)
-            ball_lin, ball_ang = p.getBaseVelocity(ball_id, physicsClientId=client)
-            apple_pos, apple_quat = p.getBasePositionAndOrientation(apple_id, physicsClientId=client)
-            apple_lin, apple_ang = p.getBaseVelocity(apple_id, physicsClientId=client)
+            if ball_id is not None:
+                ball_pos, ball_quat = p.getBasePositionAndOrientation(ball_id, physicsClientId=client)
+                ball_lin, ball_ang = p.getBaseVelocity(ball_id, physicsClientId=client)
+                ball_present = True
+            else:
+                ball_pos, ball_quat = ball_start, identity_quat
+                ball_lin, ball_ang = zero_vec, zero_vec
+                ball_present = False
 
-            gap = math.dist(ball_pos, apple_pos) - (BALL_RADIUS + APPLE_RADIUS)
-            min_apple_ball_gap = min(min_apple_ball_gap, gap)
-            ball_roll_distance = math.dist(ball_start_xy, (ball_pos[0], ball_pos[1]))
+            if apple_id is not None:
+                apple_pos, apple_quat = p.getBasePositionAndOrientation(apple_id, physicsClientId=client)
+                apple_lin, apple_ang = p.getBaseVelocity(apple_id, physicsClientId=client)
+                apple_present = True
+            else:
+                apple_pos, apple_quat = apple_start, identity_quat
+                apple_lin, apple_ang = zero_vec, zero_vec
+                apple_present = False
+
+            if ball_present and apple_present:
+                gap = math.dist(ball_pos, apple_pos) - (BALL_RADIUS + APPLE_RADIUS)
+                min_apple_ball_gap = min(min_apple_ball_gap, gap)
+            if ball_present:
+                ball_roll_distance = math.dist(ball_start_xy, (ball_pos[0], ball_pos[1]))
 
             frames.append({
                 "frame_index": frame_index,
                 "time_sec": (frame_index - 1) / float(fps),
                 "soccer_ball": {
+                    "present": ball_present,
                     "location": list(ball_pos),
                     "quaternion_xyzw": list(ball_quat),
                     "linear_velocity": list(ball_lin),
                     "angular_velocity": list(ball_ang),
                 },
                 "apple": {
+                    "present": apple_present,
                     "location": list(apple_pos),
                     "quaternion_xyzw": list(apple_quat),
                     "linear_velocity": list(apple_lin),
@@ -196,7 +228,9 @@ def simulate(args: argparse.Namespace) -> dict:
                     "mass": float(args.ball_mass),
                     "initial_location": list(ball_start),
                     "friction": float(args.ball_friction),
+                    "rolling_friction": float(args.ball_rolling_friction),
                     "restitution": float(args.ball_restitution),
+                    "active": int(ball_active),
                 },
                 "apple": {
                     "radius": APPLE_RADIUS,
@@ -205,6 +239,7 @@ def simulate(args: argparse.Namespace) -> dict:
                     "initial_linear_velocity": list(apple_initial_velocity),
                     "friction": float(args.apple_friction),
                     "restitution": float(args.apple_restitution),
+                    "active": int(apple_active),
                 },
                 "ground": {
                     "friction": float(args.grass_friction),

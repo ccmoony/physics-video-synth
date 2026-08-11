@@ -33,6 +33,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cue-vx", type=float, default=0.0)
     parser.add_argument("--cue-vy", type=float, default=1.0)
     parser.add_argument("--cue-vz", type=float, default=0.0)
+
+    # ---- Per-ball overrides (the PCVE edit surface) -----------------------
+    # Left at None each falls back to the corresponding global flag above,
+    # which reproduces the pre-PCVE behaviour exactly.
+    for prefix in ("cue", "target"):
+        parser.add_argument(f"--{prefix}-mass", type=float, default=None)
+        parser.add_argument(f"--{prefix}-friction", type=float, default=None)
+        parser.add_argument(f"--{prefix}-restitution", type=float, default=None)
+        parser.add_argument(f"--{prefix}-rolling-friction", type=float, default=None)
+        parser.add_argument(f"--{prefix}-spinning-friction", type=float, default=None)
+    # 0 removes that ball from the sim entirely; its frame slot still
+    # appears in the output (frozen at its start pose, present=false).
+    parser.add_argument("--cue-active", type=int, default=1)
+    parser.add_argument("--target-active", type=int, default=1)
     return parser.parse_args()
 
 
@@ -187,87 +201,117 @@ def simulate(args: argparse.Namespace) -> dict:
                 physicsClientId=client,
             )
 
+        def resolved(prefix: str, key: str):
+            v = getattr(args, f"{prefix}_{key}", None)
+            return float(v) if v is not None else float(getattr(args, f"ball_{key}"))
+
         ball_shape = p.createCollisionShape(
             p.GEOM_SPHERE,
             radius=radius,
             physicsClientId=client,
         )
 
-        cue_id = p.createMultiBody(
-            baseMass=float(args.ball_mass),
-            baseCollisionShapeIndex=ball_shape,
-            baseVisualShapeIndex=-1,
-            basePosition=cue_initial_location,
-            baseOrientation=(0.0, 0.0, 0.0, 1.0),
-            physicsClientId=client,
-        )
-        p.changeDynamics(
-            cue_id,
-            -1,
-            lateralFriction=float(args.ball_friction),
-            spinningFriction=float(args.ball_spinning_friction),
-            rollingFriction=float(args.ball_rolling_friction),
-            restitution=float(args.ball_restitution),
-            linearDamping=0.0,
-            angularDamping=0.0,
-            collisionMargin=0.0005,
-            physicsClientId=client,
-        )
-        p.resetBaseVelocity(
-            cue_id,
-            linearVelocity=cue_initial_velocity,
-            physicsClientId=client,
-        )
+        cue_active = bool(int(args.cue_active))
+        target_active = bool(int(args.target_active))
 
-        target_id = p.createMultiBody(
-            baseMass=float(args.ball_mass),
-            baseCollisionShapeIndex=ball_shape,
-            baseVisualShapeIndex=-1,
-            basePosition=target_initial_location,
-            baseOrientation=(0.0, 0.0, 0.0, 1.0),
-            physicsClientId=client,
-        )
-        p.changeDynamics(
-            target_id,
-            -1,
-            lateralFriction=float(args.ball_friction),
-            spinningFriction=float(args.ball_spinning_friction),
-            rollingFriction=float(args.ball_rolling_friction),
-            restitution=float(args.ball_restitution),
-            linearDamping=0.0,
-            angularDamping=0.0,
-            collisionMargin=0.0005,
-            physicsClientId=client,
-        )
+        cue_id = None
+        if cue_active:
+            cue_id = p.createMultiBody(
+                baseMass=resolved("cue", "mass"),
+                baseCollisionShapeIndex=ball_shape,
+                baseVisualShapeIndex=-1,
+                basePosition=cue_initial_location,
+                baseOrientation=(0.0, 0.0, 0.0, 1.0),
+                physicsClientId=client,
+            )
+            p.changeDynamics(
+                cue_id,
+                -1,
+                lateralFriction=resolved("cue", "friction"),
+                spinningFriction=resolved("cue", "spinning_friction"),
+                rollingFriction=resolved("cue", "rolling_friction"),
+                restitution=resolved("cue", "restitution"),
+                linearDamping=0.0,
+                angularDamping=0.0,
+                collisionMargin=0.0005,
+                physicsClientId=client,
+            )
+            p.resetBaseVelocity(
+                cue_id,
+                linearVelocity=cue_initial_velocity,
+                physicsClientId=client,
+            )
+
+        target_id = None
+        if target_active:
+            target_id = p.createMultiBody(
+                baseMass=resolved("target", "mass"),
+                baseCollisionShapeIndex=ball_shape,
+                baseVisualShapeIndex=-1,
+                basePosition=target_initial_location,
+                baseOrientation=(0.0, 0.0, 0.0, 1.0),
+                physicsClientId=client,
+            )
+            p.changeDynamics(
+                target_id,
+                -1,
+                lateralFriction=resolved("target", "friction"),
+                spinningFriction=resolved("target", "spinning_friction"),
+                rollingFriction=resolved("target", "rolling_friction"),
+                restitution=resolved("target", "restitution"),
+                linearDamping=0.0,
+                angularDamping=0.0,
+                collisionMargin=0.0005,
+                physicsClientId=client,
+            )
 
         frames = []
         min_ball_ball_gap = float("inf")
 
+        identity_quat = (0.0, 0.0, 0.0, 1.0)
+        zero_vec = (0.0, 0.0, 0.0)
         for frame_index in range(1, frame_end + 1):
             if frame_index > 1:
                 for _ in range(substeps):
                     p.stepSimulation(physicsClientId=client)
 
-            cue_pos, cue_quat = p.getBasePositionAndOrientation(cue_id, physicsClientId=client)
-            cue_lin, cue_ang = p.getBaseVelocity(cue_id, physicsClientId=client)
+            if cue_id is not None:
+                cue_pos, cue_quat = p.getBasePositionAndOrientation(cue_id, physicsClientId=client)
+                cue_lin, cue_ang = p.getBaseVelocity(cue_id, physicsClientId=client)
+                cue_present = True
+            else:
+                cue_pos, cue_quat = cue_initial_location, identity_quat
+                cue_lin, cue_ang = zero_vec, zero_vec
+                cue_present = False
 
-            target_pos, target_quat = p.getBasePositionAndOrientation(target_id, physicsClientId=client)
-            target_lin, target_ang = p.getBaseVelocity(target_id, physicsClientId=client)
+            if target_id is not None:
+                target_pos, target_quat = p.getBasePositionAndOrientation(target_id, physicsClientId=client)
+                target_lin, target_ang = p.getBaseVelocity(target_id, physicsClientId=client)
+                target_present = True
+            else:
+                target_pos, target_quat = target_initial_location, identity_quat
+                target_lin, target_ang = zero_vec, zero_vec
+                target_present = False
 
-            dx = cue_pos[0] - target_pos[0]
-            dy = cue_pos[1] - target_pos[1]
-            dz = cue_pos[2] - target_pos[2]
-            ball_ball_gap = math.sqrt(dx * dx + dy * dy + dz * dz) - 2.0 * radius
-            min_ball_ball_gap = min(min_ball_ball_gap, ball_ball_gap)
+            if cue_present and target_present:
+                dx = cue_pos[0] - target_pos[0]
+                dy = cue_pos[1] - target_pos[1]
+                dz = cue_pos[2] - target_pos[2]
+                ball_ball_gap = math.sqrt(dx * dx + dy * dy + dz * dz) - 2.0 * radius
+                min_ball_ball_gap = min(min_ball_ball_gap, ball_ball_gap)
+            else:
+                ball_ball_gap = float("inf")
 
             frames.append(
                 {
                     "frame_index": frame_index,
                     "time_sec": (frame_index - 1) / float(fps),
+                    "cue_ball_present": cue_present,
                     "cue_ball_location": list(cue_pos),
                     "cue_ball_quaternion_xyzw": list(cue_quat),
                     "cue_ball_linear_velocity": list(cue_lin),
                     "cue_ball_angular_velocity": list(cue_ang),
+                    "target_ball_present": target_present,
                     "target_ball_location": list(target_pos),
                     "target_ball_quaternion_xyzw": list(target_quat),
                     "target_ball_linear_velocity": list(target_lin),
@@ -304,22 +348,24 @@ def simulate(args: argparse.Namespace) -> dict:
             "objects": {
                 "cue_ball": {
                     "radius": radius,
-                    "mass": float(args.ball_mass),
+                    "mass": resolved("cue", "mass"),
                     "initial_location": list(cue_initial_location),
                     "initial_velocity": list(cue_initial_velocity),
-                    "friction": float(args.ball_friction),
-                    "restitution": float(args.ball_restitution),
-                    "rolling_friction": float(args.ball_rolling_friction),
-                    "spinning_friction": float(args.ball_spinning_friction),
+                    "friction": resolved("cue", "friction"),
+                    "restitution": resolved("cue", "restitution"),
+                    "rolling_friction": resolved("cue", "rolling_friction"),
+                    "spinning_friction": resolved("cue", "spinning_friction"),
+                    "active": int(cue_active),
                 },
                 "target_ball": {
                     "radius": radius,
-                    "mass": float(args.ball_mass),
+                    "mass": resolved("target", "mass"),
                     "initial_location": list(target_initial_location),
-                    "friction": float(args.ball_friction),
-                    "restitution": float(args.ball_restitution),
-                    "rolling_friction": float(args.ball_rolling_friction),
-                    "spinning_friction": float(args.ball_spinning_friction),
+                    "friction": resolved("target", "friction"),
+                    "restitution": resolved("target", "restitution"),
+                    "rolling_friction": resolved("target", "rolling_friction"),
+                    "spinning_friction": resolved("target", "spinning_friction"),
+                    "active": int(target_active),
                 },
                 "table": {
                     "surface_z": surface_z,

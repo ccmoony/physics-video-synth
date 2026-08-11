@@ -397,11 +397,101 @@ def create_book(length: float, width: float, thickness: float, angle_deg: float,
     return parent, [cover, bottom, spine, pages], cover_center_z, parent_z
 
 
-def create_glass_marble(radius: float, location: tuple[float, float, float], name: str, scenario: dict[str, object]) -> bpy.types.Object:
+BALL_COLORS: dict[str, tuple[float, float, float, float]] = {
+    "red": (0.86, 0.10, 0.09, 1.0),
+    "blue": (0.08, 0.30, 0.85, 1.0),
+    "yellow": (0.95, 0.78, 0.08, 1.0),
+}
+
+
+def create_colored_ball_material(
+    name: str,
+    tint: tuple[float, float, float, float],
+    scenario: dict[str, object],
+) -> bpy.types.Material:
+    """Matte-plastic ball material tinted to ``tint``.
+
+    Uses Metal032's roughness and normal maps for micro-surface detail so the ball
+    still catches a highlight, but drops metallic to 0 so the tint reads clearly.
+    Falls back to a pure Principled BSDF if the AmbientCG textures are missing.
+    """
+    mat = bpy.data.materials.new(name)
+    mat.use_nodes = True
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    nodes.clear()
+
+    output = nodes.new(type="ShaderNodeOutputMaterial")
+    output.location = (800, 0)
+
+    bsdf = nodes.new(type="ShaderNodeBsdfPrincipled")
+    bsdf.location = (400, 0)
+    bsdf.inputs["Base Color"].default_value = tint
+    bsdf.inputs["Metallic"].default_value = 0.0
+    bsdf.inputs["Roughness"].default_value = 0.35
+    bsdf.inputs["Specular"].default_value = 0.5
+    links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
+
+    tex_coord = nodes.new(type="ShaderNodeTexCoord")
+    tex_coord.location = (-1000, 0)
+    mapping = nodes.new(type="ShaderNodeMapping")
+    mapping.location = (-800, 0)
+    mapping.inputs["Scale"].default_value = (3.0, 3.0, 3.0)
+    links.new(tex_coord.outputs["UV"], mapping.inputs["Vector"])
+
+    metal_dir = AMBIENTCG_DIR / "Metal032"
+
+    def load_tex(filename: str, colorspace: str = "Non-Color") -> bpy.types.Node:
+        img = bpy.data.images.load(str(metal_dir / filename), check_existing=True)
+        img.colorspace_settings.name = colorspace
+        tex = nodes.new(type="ShaderNodeTexImage")
+        tex.image = img
+        links.new(mapping.outputs["Vector"], tex.inputs["Vector"])
+        return tex
+
+    try:
+        rough_tex = load_tex("Metal032_4K-JPG_Roughness.jpg")
+        rough_tex.location = (-550, -100)
+        rough_adjust = nodes.new(type="ShaderNodeMath")
+        rough_adjust.location = (-300, -100)
+        rough_adjust.operation = "MULTIPLY"
+        rough_adjust.inputs[1].default_value = 0.5
+        links.new(rough_tex.outputs["Color"], rough_adjust.inputs[0])
+
+        rough_offset = nodes.new(type="ShaderNodeMath")
+        rough_offset.location = (-150, -100)
+        rough_offset.operation = "ADD"
+        rough_offset.inputs[1].default_value = 0.20
+        links.new(rough_adjust.outputs["Value"], rough_offset.inputs[0])
+        links.new(rough_offset.outputs["Value"], bsdf.inputs["Roughness"])
+
+        normal_tex = load_tex("Metal032_4K-JPG_NormalGL.jpg")
+        normal_tex.location = (-550, -400)
+        normal_map = nodes.new(type="ShaderNodeNormalMap")
+        normal_map.location = (-300, -400)
+        normal_map.inputs["Strength"].default_value = 0.15
+        links.new(normal_tex.outputs["Color"], normal_map.inputs["Color"])
+        links.new(normal_map.outputs["Normal"], bsdf.inputs["Normal"])
+    except RuntimeError as exc:
+        print(f"[WARN] Colored-ball detail textures missing ({exc}); using plain BSDF.")
+
+    return mat
+
+
+def create_glass_marble(
+    radius: float,
+    location: tuple[float, float, float],
+    name: str,
+    scenario: dict[str, object],
+    tint: tuple[float, float, float, float] | None = None,
+) -> bpy.types.Object:
     bpy.ops.mesh.primitive_uv_sphere_add(radius=radius, location=location)
     marble = bpy.context.object
     marble.name = name
-    marble_mat = create_steel_ball_material(scenario)
+    if tint is None:
+        marble_mat = create_steel_ball_material(scenario)
+    else:
+        marble_mat = create_colored_ball_material(f"{name}_material", tint, scenario)
     marble.data.materials.append(marble_mat)
     return marble
 
@@ -467,10 +557,14 @@ def create_scenario(args: argparse.Namespace) -> dict[str, object]:
                 "ball_mass": 0.05,
                 "ball_friction": 0.45,
                 "ball_restitution": 0.6,
+                "ball_rolling_friction": 0.002,
                 "marble_radius": MARBLE_RADIUS,
                 "marble_mass": 0.05,
+                "marble_masses": [0.05, 0.05],
                 "marble_friction": 0.15,
                 "marble_restitution": 0.3,
+                "marble_active": [1, 1],
+                "marble_initial_velocities": [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
                 "ramp_angle_deg": BOOK_ANGLE_DEG,
                 "ramp_length": BOOK_LENGTH,
                 "ramp_width": BOOK_WIDTH,
@@ -504,6 +598,15 @@ def run_physics_simulation(args: argparse.Namespace, scenario: dict[str, object]
 
     script_path = Path(__file__).with_name("simulate_ramp_collision.py")
     physics_path = args.out_dir / PHYSICS_TEMP_NAME
+    marble_active = physics.get("marble_active", [1, 1])
+    marble_initial_velocities = physics.get(
+        "marble_initial_velocities",
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+    )
+    marble_masses = physics.get(
+        "marble_masses",
+        [float(physics["marble_mass"])] * 2,
+    )
     subprocess.run(
         [
             python,
@@ -538,10 +641,27 @@ def run_physics_simulation(args: argparse.Namespace, scenario: dict[str, object]
             str(float(physics["ball_friction"])),
             "--ball-restitution",
             str(float(physics["ball_restitution"])),
+            "--ball-rolling-friction",
+            str(float(physics.get("ball_rolling_friction", 0.002))),
             "--marble-friction",
             str(float(physics["marble_friction"])),
             "--marble-restitution",
             str(float(physics["marble_restitution"])),
+            "--marble-active",
+            str(int(marble_active[0])),
+            str(int(marble_active[1])),
+            "--marble-initial-velocity-0",
+            str(float(marble_initial_velocities[0][0])),
+            str(float(marble_initial_velocities[0][1])),
+            str(float(marble_initial_velocities[0][2])),
+            "--marble-initial-velocity-1",
+            str(float(marble_initial_velocities[1][0])),
+            str(float(marble_initial_velocities[1][1])),
+            str(float(marble_initial_velocities[1][2])),
+            "--marble-mass-0",
+            str(float(marble_masses[0])),
+            "--marble-mass-1",
+            str(float(marble_masses[1])),
         ],
         check=True,
     )
@@ -563,7 +683,8 @@ def apply_physics_animation(
     stationary_marbles: list[bpy.types.Object],
     physics: dict,
 ) -> None:
-    for obj in [falling_marble, *stationary_marbles]:
+    active_marbles = [m for m in stationary_marbles if m is not None]
+    for obj in [falling_marble, *active_marbles]:
         obj.rotation_mode = "QUATERNION"
 
     for frame_record in physics["frames"]:
@@ -581,6 +702,8 @@ def apply_physics_animation(
         falling_marble.keyframe_insert(data_path="rotation_quaternion", frame=frame)
 
         for idx, marble_obj in enumerate(stationary_marbles):
+            if marble_obj is None:
+                continue
             marble_data = frame_record["marbles"][idx]
             mquat = marble_data["quaternion_xyzw"]
             marble_obj.location = marble_data["location"]
@@ -593,7 +716,7 @@ def apply_physics_animation(
             marble_obj.keyframe_insert(data_path="location", frame=frame)
             marble_obj.keyframe_insert(data_path="rotation_quaternion", frame=frame)
 
-    set_linear_keyframes([falling_marble, *stationary_marbles])
+    set_linear_keyframes([falling_marble, *active_marbles])
 
 
 def export_ground_truth(
@@ -621,9 +744,10 @@ def export_ground_truth(
             },
             "stationary_marbles": [
                 {
-                    "object_name": marble.name,
+                    "object_name": marble.name if marble is not None else None,
                     "radius_m_scene_units": MARBLE_RADIUS,
                     "index": idx,
+                    "active": marble is not None,
                 }
                 for idx, marble in enumerate(stationary_marbles)
             ],
@@ -659,13 +783,25 @@ def export_ground_truth(
                 "falling_marble_angular_velocity": physics_frame["ball_angular_velocity"],
                 "falling_marble_floor_gap": physics_frame["ball_floor_gap"],
                 "stationary_marbles": [
-                    {
-                        "matrix_world": [[float(v) for v in row] for row in marble.matrix_world],
-                        "location": [float(v) for v in marble.location],
-                        "linear_velocity": marble_data["linear_velocity"],
-                        "angular_velocity": marble_data["angular_velocity"],
-                        "gap_to_ball": marble_data["gap_to_ball"],
-                    }
+                    (
+                        {
+                            "active": False,
+                            "matrix_world": None,
+                            "location": marble_data["location"],
+                            "linear_velocity": marble_data["linear_velocity"],
+                            "angular_velocity": marble_data["angular_velocity"],
+                            "gap_to_ball": marble_data["gap_to_ball"],
+                        }
+                        if marble is None
+                        else {
+                            "active": True,
+                            "matrix_world": [[float(v) for v in row] for row in marble.matrix_world],
+                            "location": [float(v) for v in marble.location],
+                            "linear_velocity": marble_data["linear_velocity"],
+                            "angular_velocity": marble_data["angular_velocity"],
+                            "gap_to_ball": marble_data["gap_to_ball"],
+                        }
+                    )
                     for marble, marble_data in zip(stationary_marbles, physics_frame["marbles"])
                 ],
                 "camera_matrix_world": [[float(v) for v in row] for row in camera.matrix_world],
@@ -873,6 +1009,7 @@ def build_scene(args: argparse.Namespace, scenario: dict[str, object]) -> tuple[
         location=(falling_marble_x, 0.0, falling_marble_z),
         name="falling_marble",
         scenario=scenario,
+        tint=BALL_COLORS["red"],
     )
 
     # Stationary marbles at the LOW end (open side) of the book, on the table surface
@@ -888,12 +1025,19 @@ def build_scene(args: argparse.Namespace, scenario: dict[str, object]) -> tuple[
         (marble_base_x + 0.03, -0.15, stationary_base_z),
     ]
 
+    stationary_tints = (BALL_COLORS["blue"], BALL_COLORS["yellow"])
+    physics = scenario.get("physics", {})
+    marble_active = physics.get("marble_active", [1, 1]) if isinstance(physics, dict) else [1, 1]
     for i, pos in enumerate(stationary_positions):
+        if not int(marble_active[i]):
+            stationary_marbles.append(None)
+            continue
         marble = create_glass_marble(
             radius=marble_radius,
             location=pos,
             name=f"stationary_marble_{i}",
             scenario=scenario,
+            tint=stationary_tints[i],
         )
         stationary_marbles.append(marble)
     

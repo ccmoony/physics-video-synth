@@ -33,7 +33,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stone-friction", type=float, default=0.15)
     parser.add_argument("--stone-restitution", type=float, default=0.0)
     parser.add_argument("--ice-friction", type=float, default=0.015)
-    parser.add_argument("--launch-speed", type=float, default=0.9)
+    parser.add_argument("--launch-speed", type=float, default=0.9,
+        help="Symmetric magnitude applied to both stones (opposite signs). "
+        "Overridden per-stone by --stone-1-launch-speed / --stone-2-launch-speed if given.")
+    parser.add_argument("--stone-1-launch-speed", type=float, default=None,
+        help="Magnitude for the red (stone_1) stone's initial speed along +x. "
+        "Defaults to --launch-speed if unset.")
+    parser.add_argument("--stone-2-launch-speed", type=float, default=None,
+        help="Magnitude for the yellow (stone_2) stone's initial speed along -x. "
+        "Defaults to --launch-speed if unset.")
     parser.add_argument("--start-separation", type=float, default=5.0)
     parser.add_argument("--gravity-z", type=float, default=-9.8)
     return parser.parse_args()
@@ -50,14 +58,16 @@ def simulate(args: argparse.Namespace) -> dict:
     half_height = height / 2.0
     separation = float(args.start_separation)
     speed = float(args.launch_speed)
+    speed_1 = float(args.stone_1_launch_speed) if args.stone_1_launch_speed is not None else speed
+    speed_2 = float(args.stone_2_launch_speed) if args.stone_2_launch_speed is not None else speed
 
     initial_locations = [
         (-separation / 2.0, 0.0, FLOOR_Z + half_height),
         (separation / 2.0, 0.0, FLOOR_Z + half_height),
     ]
     initial_velocities = [
-        (speed, 0.0, 0.0),
-        (-speed, 0.0, 0.0),
+        (speed_1, 0.0, 0.0),
+        (-speed_2, 0.0, 0.0),
     ]
     masses = [float(args.stone_mass), float(args.stone_2_mass)]
 

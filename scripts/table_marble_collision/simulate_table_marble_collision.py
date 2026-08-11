@@ -192,6 +192,10 @@ def parse_args() -> argparse.Namespace:
         "rather than a repeat of the hero.",
     )
     parser.add_argument("--launch-heading-deg", type=float, default=0.0)
+    # PCVE DELETE edit for the small marble: 0 removes ball_b, equivalent
+    # to --disable-ball-b. Big marble is always present -- the whole
+    # simulation is built around its roll.
+    parser.add_argument("--ball-b-active", type=int, default=1)
     return parser.parse_args()
 
 
@@ -422,7 +426,7 @@ def simulate(args: argparse.Namespace) -> dict:
                           float(args.ball_rolling_friction),
                           float(args.ball_spinning_friction))
         ball_b = None
-        if not args.disable_ball_b:
+        if not args.disable_ball_b and bool(int(args.ball_b_active)):
             ball_b = add_ball(client, r_b, m_b, ball_b_start,
                               float(args.ball_b_friction),
                               float(args.ball_b_restitution),
@@ -587,6 +591,7 @@ def simulate(args: argparse.Namespace) -> dict:
                     "initial_location": list(ball_b_start),
                     "restitution": float(args.ball_b_restitution),
                     "friction": float(args.ball_b_friction),
+                    "present": ball_b is not None,
                 },
                 "table": {
                     "footprint_x": list(TABLE_X),

@@ -119,6 +119,19 @@ def import_mahjong_assets() -> tuple[bpy.types.Object, bpy.types.Object]:
     bpy.context.view_layer.objects.active = die_parts[0]
     bpy.ops.object.parent_clear(type="CLEAR_KEEP_TRANSFORM")
 
+    # Tint the two dice with distinct colours while preserving the printed
+    # pips. The GLB drives Base Color from an image texture (the pip art);
+    # both dice share ONE material, so we (a) give each die its own copy,
+    # then (b) insert a MULTIPLY MixRGB node between the pip texture and
+    # the Principled BSDF's Base Color, and set the mix colour per die.
+    # Multiply-tint keeps the pip contrast intact: white body -> tinted
+    # body, dark pips stay dark.
+    die_tints = [
+        (0.90, 0.15, 0.15, 1.0),   # red_die   (idx 0) -- warm red body
+        (0.96, 0.95, 0.90, 1.0),   # white_die (idx 1) -- near-white, slight cream
+    ]
+    die_names = ["red_die", "white_die"]
+
     dice = []
     for idx, obj in enumerate(die_parts):
         bpy.context.view_layer.objects.active = obj
@@ -126,11 +139,32 @@ def import_mahjong_assets() -> tuple[bpy.types.Object, bpy.types.Object]:
         obj.select_set(True)
         bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
         bpy.ops.object.origin_set(type="GEOMETRY_ORIGIN", center="BOUNDS")
-        obj.name = f"die_{idx}"
+        obj.name = die_names[idx]
         obj.location = (0.0, 0.0, 0.0)
         obj.rotation_mode = "QUATERNION"
         obj.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
         obj.scale = (1.0, 1.0, 1.0)
+
+        if obj.data.materials and obj.data.materials[0] is not None:
+            base = obj.data.materials[0]
+            mat = base.copy()
+            mat.name = f"{die_names[idx]}_mat"
+            tree = mat.node_tree
+            bsdf = tree.nodes.get("Principled BSDF")
+            if bsdf is not None and bsdf.inputs["Base Color"].is_linked:
+                src_link = bsdf.inputs["Base Color"].links[0]
+                src_socket = src_link.from_socket
+                tree.links.remove(src_link)
+                mix = tree.nodes.new("ShaderNodeMixRGB")
+                mix.name = f"tint_{die_names[idx]}"
+                mix.blend_type = "MULTIPLY"
+                mix.inputs["Fac"].default_value = 1.0
+                mix.inputs["Color2"].default_value = die_tints[idx]
+                tree.links.new(src_socket, mix.inputs["Color1"])
+                tree.links.new(mix.outputs["Color"], bsdf.inputs["Base Color"])
+            obj.data.materials.clear()
+            obj.data.materials.append(mat)
+
         dice.append(obj)
 
     return dice[0], dice[1]
@@ -194,10 +228,26 @@ def create_scenario(args: argparse.Namespace) -> dict[str, object]:
             },
             "physics": {
                 "die_edge": DIE_EDGE,
+                # Per-die lists in slot order (die_1 = index 0, die_2 = index 1).
+                # A PCVE edit names one die and writes at its index; the
+                # scalars below stay as fallback defaults.
+                "die_masses": [0.006, 0.006],
+                "die_frictions": [0.5, 0.5],
+                "die_restitutions": [0.72, 0.72],
+                "die_active": [1, 1],
+                # Per-die initial DOWNWARD speed (m/s). Pure vertical throw,
+                # no lateral component and no spin: die_1 is thrown harder
+                # than die_2 so the two moments of impact are distinct. This
+                # is the PCVE `initial_velocity` knob per die.
+                "die_initial_speeds": [1.5, 0.8],
                 "die_mass": 0.006,
                 "die_friction": 0.5,
                 "die_restitution": 0.72,
                 "floor_friction": 0.55,
+                # Split out from --die-restitution: pre-PCVE the two were
+                # locked together, but an edit on one die's restitution must
+                # only touch that die and its pairings, not the floor.
+                "floor_restitution": 0.72,
                 "drop_height": 0.6,
                 "floor_z": FLOOR_Z,
                 "die_0_xy": list(DIE_0_XY),
@@ -263,6 +313,12 @@ def run_physics_simulation(args: argparse.Namespace, scenario: dict[str, object]
             *[str(float(v)) for v in physics["die_0_xy"]],
             "--die-1-xy",
             *[str(float(v)) for v in physics["die_1_xy"]],
+            "--floor-restitution", str(float(physics.get("floor_restitution", physics["die_restitution"]))),
+            "--die-masses", *[str(float(v)) for v in physics["die_masses"]],
+            "--die-frictions-list", *[str(float(v)) for v in physics["die_frictions"]],
+            "--die-restitutions-list", *[str(float(v)) for v in physics["die_restitutions"]],
+            "--die-active", *[str(int(v)) for v in physics["die_active"]],
+            "--die-initial-speeds", *[str(float(v)) for v in physics["die_initial_speeds"]],
         ],
         check=True,
     )
@@ -279,13 +335,17 @@ def set_linear_keyframes(objects) -> None:
                     key.interpolation = "LINEAR"
 
 
-def apply_physics_animation(dice: list[bpy.types.Object], physics: dict) -> None:
+def apply_physics_animation(dice: list, physics: dict) -> None:
     for obj in dice:
+        if obj is None:
+            continue
         obj.rotation_mode = "QUATERNION"
 
     for frame_record in physics["frames"]:
         frame = int(frame_record["frame_index"])
         for idx, die_obj in enumerate(dice):
+            if die_obj is None:
+                continue
             die_data = frame_record["dice"][idx]
             dquat = die_data["quaternion_xyzw"]
             die_obj.location = die_data["location"]
@@ -298,7 +358,7 @@ def apply_physics_animation(dice: list[bpy.types.Object], physics: dict) -> None
             die_obj.keyframe_insert(data_path="location", frame=frame)
             die_obj.keyframe_insert(data_path="rotation_quaternion", frame=frame)
 
-    set_linear_keyframes(dice)
+    set_linear_keyframes([o for o in dice if o is not None])
 
 
 def export_ground_truth(
@@ -320,7 +380,11 @@ def export_ground_truth(
         "physics": {key: value for key, value in physics.items() if key != "frames"},
         "objects": {
             "dice": [
-                {"object_name": die.name, "index": idx}
+                (
+                    {"present": False, "object_name": None, "index": idx}
+                    if die is None
+                    else {"present": True, "object_name": die.name, "index": idx}
+                )
                 for idx, die in enumerate(dice)
             ],
         },
@@ -350,12 +414,17 @@ def export_ground_truth(
                 "frame_index": frame,
                 "time_sec": (frame - 1) / float(fps),
                 "dice": [
-                    {
-                        "matrix_world": [[float(v) for v in row] for row in die.matrix_world],
-                        "location": [float(v) for v in die.location],
-                        "linear_velocity": die_data["linear_velocity"],
-                        "angular_velocity": die_data["angular_velocity"],
-                    }
+                    (
+                        {"present": False}
+                        if die is None
+                        else {
+                            "present": True,
+                            "matrix_world": [[float(v) for v in row] for row in die.matrix_world],
+                            "location": [float(v) for v in die.location],
+                            "linear_velocity": die_data["linear_velocity"],
+                            "angular_velocity": die_data["angular_velocity"],
+                        }
+                    )
                     for die, die_data in zip(dice, physics_frame["dice"])
                 ],
                 "camera_matrix_world": [[float(v) for v in row] for row in camera.matrix_world],
@@ -471,7 +540,7 @@ def build_scene(args: argparse.Namespace, scenario: dict[str, object]) -> tuple[
     )
 
     die_0, die_1 = import_mahjong_assets()
-    dice = [die_0, die_1]
+    imported = [die_0, die_1]
 
     physics = scenario["physics"]
     assert isinstance(physics, dict)
@@ -479,10 +548,20 @@ def build_scene(args: argparse.Namespace, scenario: dict[str, object]) -> tuple[
     drop_height = float(physics["drop_height"])
     edge = float(physics["die_edge"])
     die_xy = [tuple(physics["die_0_xy"]), tuple(physics["die_1_xy"])]
+    active = list(physics.get("die_active", [1, 1]))
 
-    for idx, (obj, (x, y)) in enumerate(zip(dice, die_xy)):
+    dice: list = []
+    for idx, (obj, (x, y)) in enumerate(zip(imported, die_xy)):
+        if not int(active[idx]):
+            # Remove the imported placeholder from the scene so a deleted die
+            # doesn't show up anywhere -- it's easier than trying to hide it
+            # after the fact and matches the sim's frame slot being present=false.
+            bpy.data.objects.remove(obj, do_unlink=True)
+            dice.append(None)
+            continue
         obj.location = (x, y, floor_z + edge / 2.0 + drop_height + 0.05 * idx)
         obj.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
+        dice.append(obj)
 
     frame_end = max(2, int(round(float(args.duration_sec) * int(args.fps))))
     scene.frame_start = 1

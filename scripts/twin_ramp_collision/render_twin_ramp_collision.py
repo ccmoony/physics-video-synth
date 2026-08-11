@@ -150,6 +150,25 @@ def build_scenario(args: argparse.Namespace) -> dict[str, Any]:
                 "ball_restitution": 0.87,
                 "ball_rolling_friction": 0.0012,
                 "ball_spinning_friction": 0.004,
+                # Per-ball fields, explicit baseline copies of the globals
+                # above so a PCVE mass/friction/restitution edit has a
+                # well-defined `from` value to diff against. ball_a is the
+                # +X-side marble (hue-shifted from the yellow base GLB to
+                # purple); ball_b is the -X-side one (hue 0.50 is Blender's
+                # no-op so it keeps the base yellow).
+                "ball_a_mass": 0.343,
+                "ball_a_friction": 0.30,
+                "ball_a_restitution": 0.87,
+                "ball_a_rolling_friction": 0.0012,
+                "ball_b_mass": 0.343,
+                "ball_b_friction": 0.30,
+                "ball_b_restitution": 0.87,
+                "ball_b_rolling_friction": 0.0012,
+                # Two-slot presence list (ball_a on +X, ball_b on -X). A
+                # PCVE DELETE edit writes 0 at the ball's slot; the sim
+                # skips creating that body and its frame slot is filled
+                # with present=false.
+                "active": [1, 1],
                 "track_friction": 0.55,
                 "track_restitution": 0.14,
                 "release_inset": 0.030,
@@ -826,6 +845,16 @@ def run_physics(args: argparse.Namespace, scenario: dict) -> dict:
         "--release-inset", str(float(phys["release_inset"])),
         "--release-inset-bias", str(float(phys["release_inset_bias"])),
         "--gravity-z", str(float(phys["gravity_z"])),
+        "--ball-a-mass",              str(float(phys["ball_a_mass"])),
+        "--ball-a-friction",          str(float(phys["ball_a_friction"])),
+        "--ball-a-restitution",       str(float(phys["ball_a_restitution"])),
+        "--ball-a-rolling-friction",  str(float(phys["ball_a_rolling_friction"])),
+        "--ball-b-mass",              str(float(phys["ball_b_mass"])),
+        "--ball-b-friction",          str(float(phys["ball_b_friction"])),
+        "--ball-b-restitution",       str(float(phys["ball_b_restitution"])),
+        "--ball-b-rolling-friction",  str(float(phys["ball_b_rolling_friction"])),
+        "--ball-a-active", str(int(phys.get("active", [1, 1])[0])),
+        "--ball-b-active", str(int(phys.get("active", [1, 1])[1])),
     ]
     subprocess.run(command, check=True)
     data = json.loads(out.read_text(encoding="utf-8"))
@@ -962,8 +991,20 @@ def build_scene(args: argparse.Namespace, scenario: dict, physics: dict):
     ball_b = import_marble(
         "ball_b", diameter, hue=float(b_cfg["hue"]), saturation=float(b_cfg["saturation"]),
     )
-    apply_keyframes(ball_a, physics["frames"], "a")
-    apply_keyframes(ball_b, physics["frames"], "b")
+    # DELETE edit: sim skipped creating that ball; hide it from the render
+    # rather than trying to animate frozen frames.
+    a_present = bool(physics["objects"]["ball_a"].get("present", True))
+    b_present = bool(physics["objects"]["ball_b"].get("present", True))
+    if a_present:
+        apply_keyframes(ball_a, physics["frames"], "a")
+    else:
+        ball_a.hide_viewport = True
+        ball_a.hide_render = True
+    if b_present:
+        apply_keyframes(ball_b, physics["frames"], "b")
+    else:
+        ball_b.hide_viewport = True
+        ball_b.hide_render = True
 
     cam_cfg = scenario["camera"]
     bpy.ops.object.camera_add(location=tuple(cam_cfg["location"]))
@@ -1049,8 +1090,14 @@ def export_ground_truth(out_dir: Path, ball_a, ball_b, camera, track, physics: d
         "frame_end": frame_end,
         "physics": {k: v for k, v in physics.items() if k != "frames"},
         "objects": {
-            "ball_a": {"object_name": ball_a.name, "radius": radius, "side": 1},
-            "ball_b": {"object_name": ball_b.name, "radius": radius, "side": -1},
+            "ball_a": {
+                "object_name": ball_a.name, "radius": radius, "side": 1,
+                "present": not bool(ball_a.hide_render),
+            },
+            "ball_b": {
+                "object_name": ball_b.name, "radius": radius, "side": -1,
+                "present": not bool(ball_b.hide_render),
+            },
             "track": {
                 "track_z": track.track_z,
                 "valley_half": track.valley_half,
@@ -1082,7 +1129,11 @@ def export_ground_truth(out_dir: Path, ball_a, ball_b, camera, track, physics: d
         }
         for name, obj in (("ball_a", ball_a), ("ball_b", ball_b)):
             key = name.split("_")[1]
+            if bool(obj.hide_render):
+                entry[name] = {"present": False}
+                continue
             entry[name] = {
+                "present": True,
                 "matrix_world": [[float(v) for v in row] for row in obj.matrix_world],
                 "location": [float(v) for v in obj.location],
                 "linear_velocity": pf["balls"][key]["linear_velocity"],

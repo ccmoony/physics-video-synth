@@ -234,11 +234,22 @@ def create_scenario(args: argparse.Namespace) -> dict[str, object]:
                 "lens_mm": 40.0,
             },
             "physics": {
+                # Row size: baseline 4 tiles. The PCVE vocab hard-codes 4
+                # named objects (domino_1 .. domino_4) that address per-tile
+                # lists below; changing this drift-locks the vocab.
                 "domino_count": 4,
                 "domino_spacing": 0.8,
                 "domino_thickness": DOMINO_THICKNESS,
                 "domino_width": DOMINO_WIDTH,
                 "domino_height": DOMINO_HEIGHT,
+                # Per-tile lists in row order (index 0 = pushed tile). A
+                # PCVE edit names one tile and writes at its index; the
+                # scalars below stay as defaults for CLI callers that do
+                # not care about per-tile control.
+                "domino_masses": [0.12, 0.12, 0.12, 0.12],
+                "domino_frictions": [0.6, 0.6, 0.6, 0.6],
+                "domino_restitutions": [0.05, 0.05, 0.05, 0.05],
+                "domino_active": [1, 1, 1, 1],
                 "domino_mass": 0.12,
                 "domino_friction": 0.6,
                 "domino_restitution": 0.05,
@@ -316,6 +327,10 @@ def run_physics_simulation(args: argparse.Namespace, scenario: dict[str, object]
             str(float(physics["scene_offset_x"])),
             "--scene-offset-y",
             str(float(physics["scene_offset_y"])),
+            "--domino-masses", *[str(float(v)) for v in physics["domino_masses"]],
+            "--domino-frictions-list", *[str(float(v)) for v in physics["domino_frictions"]],
+            "--domino-restitutions-list", *[str(float(v)) for v in physics["domino_restitutions"]],
+            "--domino-active", *[str(int(v)) for v in physics["domino_active"]],
         ],
         check=True,
     )
@@ -332,13 +347,17 @@ def set_linear_keyframes(objects) -> None:
                     key.interpolation = "LINEAR"
 
 
-def apply_physics_animation(dominoes: list[bpy.types.Object], physics: dict) -> None:
+def apply_physics_animation(dominoes: list, physics: dict) -> None:
     for obj in dominoes:
+        if obj is None:
+            continue
         obj.rotation_mode = "QUATERNION"
 
     for frame_record in physics["frames"]:
         frame = int(frame_record["frame_index"])
         for idx, domino_obj in enumerate(dominoes):
+            if domino_obj is None:
+                continue
             domino_data = frame_record["dominoes"][idx]
             dquat = domino_data["quaternion_xyzw"]
             domino_obj.location = domino_data["location"]
@@ -351,7 +370,7 @@ def apply_physics_animation(dominoes: list[bpy.types.Object], physics: dict) -> 
             domino_obj.keyframe_insert(data_path="location", frame=frame)
             domino_obj.keyframe_insert(data_path="rotation_quaternion", frame=frame)
 
-    set_linear_keyframes(dominoes)
+    set_linear_keyframes([o for o in dominoes if o is not None])
 
 
 def export_ground_truth(
@@ -373,7 +392,11 @@ def export_ground_truth(
         "physics": {key: value for key, value in physics.items() if key != "frames"},
         "objects": {
             "dominoes": [
-                {"object_name": domino.name, "index": idx}
+                (
+                    {"present": False, "object_name": None, "index": idx}
+                    if domino is None
+                    else {"present": True, "object_name": domino.name, "index": idx}
+                )
                 for idx, domino in enumerate(dominoes)
             ],
         },
@@ -403,13 +426,18 @@ def export_ground_truth(
                 "frame_index": frame,
                 "time_sec": (frame - 1) / float(fps),
                 "dominoes": [
-                    {
-                        "matrix_world": [[float(v) for v in row] for row in domino.matrix_world],
-                        "location": [float(v) for v in domino.location],
-                        "linear_velocity": domino_data["linear_velocity"],
-                        "angular_velocity": domino_data["angular_velocity"],
-                        "tilt_deg": domino_data["tilt_deg"],
-                    }
+                    (
+                        {"present": False}
+                        if domino is None
+                        else {
+                            "present": True,
+                            "matrix_world": [[float(v) for v in row] for row in domino.matrix_world],
+                            "location": [float(v) for v in domino.location],
+                            "linear_velocity": domino_data["linear_velocity"],
+                            "angular_velocity": domino_data["angular_velocity"],
+                            "tilt_deg": domino_data["tilt_deg"],
+                        }
+                    )
                     for domino, domino_data in zip(dominoes, physics_frame["dominoes"])
                 ],
                 "camera_matrix_world": [[float(v) for v in row] for row in camera.matrix_world],
@@ -524,10 +552,18 @@ def build_scene(args: argparse.Namespace, scenario: dict[str, object]) -> tuple[
     height = float(physics["domino_height"])
 
     row_start = -(count - 1) * spacing / 2.0
-    dominoes: list[bpy.types.Object] = []
+    active_flags = physics.get("domino_active", [1] * count)
+    dominoes: list = []
+    first_present_index = next((i for i, a in enumerate(active_flags) if int(a)), None)
     for i in range(count):
-        obj = domino_master if i == 0 else domino_master.copy()
-        if i > 0:
+        if not int(active_flags[i]):
+            dominoes.append(None)
+            continue
+        # Use the imported master mesh for the first present tile, copy for
+        # the rest -- otherwise the master ends up unlinked when index 0 is
+        # removed by an edit.
+        obj = domino_master if i == first_present_index else domino_master.copy()
+        if i != first_present_index:
             scene.collection.objects.link(obj)
         obj.name = f"domino_{i:03d}"
         obj.rotation_mode = "QUATERNION"

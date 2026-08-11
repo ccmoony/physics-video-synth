@@ -184,6 +184,10 @@ def parse_args() -> argparse.Namespace:
         "measured. This is the run that checks the projectile prediction against "
         "something other than itself, and it is how the aim was set.",
     )
+    # PCVE DELETE edit for the target: 0 removes ball_b, equivalent to
+    # --disable-ball-b (both are honoured). ball_a is required -- the
+    # whole simulation is built around its roll off the table.
+    parser.add_argument("--ball-b-active", type=int, default=1)
     parser.add_argument(
         "--ball-rolling-friction", type=float, default=0.0,
         help="Kept at 0 so all rolling resistance comes from the surfaces. "
@@ -587,12 +591,16 @@ def simulate(args: argparse.Namespace) -> dict:
                                  float(args.props_friction),
                                  float(args.props_restitution))
 
+        # ball_a is always created -- the whole simulation is centred on its
+        # roll off the table. Only ball_b is optional.
+        ball_b_active = bool(int(args.ball_b_active)) and not bool(args.disable_ball_b)
+
         ball_a = add_ball(client, r_a, m_a, ball_a_start,
                           float(args.ball_a_friction), float(args.ball_a_restitution),
                           float(args.ball_rolling_friction),
                           float(args.ball_spinning_friction))
         ball_b = None
-        if not args.disable_ball_b:
+        if ball_b_active:
             ball_b = add_ball(client, r_b, m_b, ball_b_start,
                               float(args.ball_b_friction),
                               float(args.ball_b_restitution),

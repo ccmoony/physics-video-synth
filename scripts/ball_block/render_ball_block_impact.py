@@ -131,7 +131,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--resolution", nargs=2, type=int, default=(960, 540))
     parser.add_argument("--fps", type=int, default=24)
-    parser.add_argument("--duration-sec", type=float, default=8.0)
+    parser.add_argument("--duration-sec", type=float, default=3.0)
     parser.add_argument("--samples", type=int, default=96)
     parser.add_argument("--preview-frame", type=int, default=86)
     parser.add_argument("--device", choices=("auto", "cpu"), default="cpu")
@@ -337,6 +337,15 @@ def create_scenario(args: argparse.Namespace) -> dict[str, object]:
             "ball_restitution": 0.78 + rng.uniform(-0.06, 0.04) * jitter,
             "block_friction": 0.32 + rng.uniform(-0.05, 0.07) * jitter,
             "block_restitution": 0.55 + rng.uniform(-0.06, 0.05) * jitter,
+            # Not jittered: these are the PCVE edit surface, and a jittered
+            # baseline would make an edit's "from" value a lie. They match the
+            # values that were previously hard-coded in the simulator.
+            "ball_rolling_friction": 0.0015,
+            "block_rolling_friction": 0.006,
+            # A one-element list, not a bare int: the PCVE edit DSL writes
+            # DELETE through a list index, matching the other scenes' active
+            # flags. 0 removes the block from both the simulation and render.
+            "block_active": [1],
         },
         "render": {
             "exposure": rng.uniform(-0.08, 0.05),
@@ -1475,9 +1484,29 @@ def add_block_wear(block: bpy.types.Object, scenario: dict[str, object]) -> None
         patch.data.materials.append(mat)
 
 
-def add_wood_block(scenario: dict[str, object]) -> bpy.types.Object:
+def block_active_flag(physics: dict) -> int:
+    """Read the block's active flag, tolerating the bare-int legacy form.
+
+    Stored as a one-element list so the PCVE edit DSL can write it by index,
+    but a hand-written scenario JSON may well say ``"block_active": 0``.
+    """
+    value = physics.get("block_active", [1])
+    if isinstance(value, (list, tuple)):
+        return int(value[0]) if value else 1
+    return int(value)
+
+
+def add_wood_block(scenario: dict[str, object]) -> bpy.types.Object | None:
+    """Build the block, or nothing at all if a DELETE edit switched it off.
+
+    Returning None rather than hiding the object matters: a hidden mesh still
+    casts no shadow but does still exist in the .blend, and anything reading
+    the scene would report a block the video does not contain.
+    """
     physics = scenario["physics"]
     assert isinstance(physics, dict)
+    if not block_active_flag(physics):
+        return None
     location = tuple(float(value) for value in physics["block_location"])
     bpy.ops.mesh.primitive_cube_add(size=1.0, location=location)
     block = bpy.context.object
@@ -1500,7 +1529,16 @@ def run_physics_simulation(
     radius: float,
     scenario: dict[str, object],
 ) -> dict:
-    python = shutil.which("python3") or shutil.which("python")
+    # Prefer the workspace's own PyBullet env over whatever python happens to
+    # be on PATH. Blender does not inherit an activated conda env, so PATH
+    # alone resolves to the system python, which has no pybullet -- the render
+    # then dies several minutes in, after the scene is already built.
+    physics_python = WORKSPACE_DIR.parent / "miniconda" / "envs" / "physics" / "bin" / "python"
+    python = (
+        str(physics_python)
+        if physics_python.exists()
+        else (shutil.which("python3") or shutil.which("python"))
+    )
     if not python:
         raise RuntimeError("Cannot find python3/python for the PyBullet physics simulation.")
 
@@ -1551,6 +1589,12 @@ def run_physics_simulation(
             str(float(physics["block_friction"])),
             "--block-restitution",
             str(float(physics["block_restitution"])),
+            "--ball-rolling-friction",
+            str(float(physics.get("ball_rolling_friction", 0.0015))),
+            "--block-rolling-friction",
+            str(float(physics.get("block_rolling_friction", 0.006))),
+            "--block-active",
+            str(block_active_flag(physics)),
         ],
         check=True,
     )
@@ -1559,13 +1603,16 @@ def run_physics_simulation(
     return records
 
 
-def apply_physics_animation(ball: bpy.types.Object, block: bpy.types.Object, physics: dict) -> None:
-    for obj in (ball, block):
+def apply_physics_animation(
+    ball: bpy.types.Object, block: bpy.types.Object | None, physics: dict
+) -> None:
+    animated = [(ball, "ball")] + ([(block, "wood_block")] if block is not None else [])
+    for obj, _prefix in animated:
         obj.rotation_mode = "QUATERNION"
 
     for frame_record in physics["frames"]:
         frame = int(frame_record["frame_index"])
-        for obj, prefix in ((ball, "ball"), (block, "wood_block")):
+        for obj, prefix in animated:
             quat_xyzw = frame_record[f"{prefix}_quaternion_xyzw"]
             obj.location = frame_record[f"{prefix}_location"]
             obj.rotation_quaternion = (
@@ -1577,7 +1624,7 @@ def apply_physics_animation(ball: bpy.types.Object, block: bpy.types.Object, phy
             obj.keyframe_insert(data_path="location", frame=frame)
             obj.keyframe_insert(data_path="rotation_quaternion", frame=frame)
 
-    set_linear_keyframes((ball, block))
+    set_linear_keyframes(obj for obj, _prefix in animated)
 
 
 def set_linear_keyframes(objects: Iterable[bpy.types.Object]) -> None:
@@ -1591,7 +1638,7 @@ def set_linear_keyframes(objects: Iterable[bpy.types.Object]) -> None:
 def export_ground_truth(
     out_dir: Path,
     ball: bpy.types.Object,
-    block: bpy.types.Object,
+    block: bpy.types.Object | None,
     camera: bpy.types.Object,
     frame_end: int,
     fps: int,
@@ -1615,10 +1662,18 @@ def export_ground_truth(
                 "object_name": ball.name,
                 "radius_m_scene_units": BALL_RADIUS,
             },
-            "wood_block": {
-                "object_name": block.name,
-                "dimensions_scene_units": list(WOOD_BLOCK_DIMENSIONS),
-            },
+            # A deleted block keeps its slot with present=false rather than
+            # vanishing, so a consumer diffing an edit against its source sees
+            # the same object keys on both sides.
+            "wood_block": (
+                {"present": False, "object_name": None}
+                if block is None
+                else {
+                    "present": True,
+                    "object_name": block.name,
+                    "dimensions_scene_units": list(WOOD_BLOCK_DIMENSIONS),
+                }
+            ),
         },
         "camera": {
             "object_name": camera.name,
@@ -1643,27 +1698,34 @@ def export_ground_truth(
     for frame in range(1, frame_end + 1):
         scene.frame_set(frame)
         physics_frame = physics_by_frame[frame]
-        records["frames"].append(
-            {
-                "frame_index": frame,
-                "time_sec": (frame - 1) / float(fps),
-                "ball_matrix_world": [[float(v) for v in row] for row in ball.matrix_world],
-                "wood_block_matrix_world": [[float(v) for v in row] for row in block.matrix_world],
-                "camera_matrix_world": [[float(v) for v in row] for row in camera.matrix_world],
-                "camera_world_to_camera_matrix": [
-                    [float(v) for v in row]
-                    for row in camera.matrix_world.inverted()
-                ],
-                "ball_location": [float(v) for v in ball.location],
-                "wood_block_location": [float(v) for v in block.location],
-                "ball_linear_velocity": physics_frame["ball_linear_velocity"],
-                "ball_angular_velocity": physics_frame["ball_angular_velocity"],
-                "wood_block_linear_velocity": physics_frame["wood_block_linear_velocity"],
-                "wood_block_angular_velocity": physics_frame["wood_block_angular_velocity"],
-                "ball_floor_gap": physics_frame["ball_floor_gap"],
-                "ball_block_gap": physics_frame["ball_block_gap"],
-            }
-        )
+        entry = {
+            "frame_index": frame,
+            "time_sec": (frame - 1) / float(fps),
+            "ball_matrix_world": [[float(v) for v in row] for row in ball.matrix_world],
+            "camera_matrix_world": [[float(v) for v in row] for row in camera.matrix_world],
+            "camera_world_to_camera_matrix": [
+                [float(v) for v in row]
+                for row in camera.matrix_world.inverted()
+            ],
+            "ball_location": [float(v) for v in ball.location],
+            "ball_linear_velocity": physics_frame["ball_linear_velocity"],
+            "ball_angular_velocity": physics_frame["ball_angular_velocity"],
+            "ball_floor_gap": physics_frame["ball_floor_gap"],
+            "ball_block_gap": physics_frame["ball_block_gap"],
+            "wood_block_present": block is not None,
+        }
+        if block is not None:
+            entry.update(
+                {
+                    "wood_block_matrix_world": [
+                        [float(v) for v in row] for row in block.matrix_world
+                    ],
+                    "wood_block_location": [float(v) for v in block.location],
+                    "wood_block_linear_velocity": physics_frame["wood_block_linear_velocity"],
+                    "wood_block_angular_velocity": physics_frame["wood_block_angular_velocity"],
+                }
+            )
+        records["frames"].append(entry)
     (out_dir / GROUND_TRUTH_NAME).write_text(
         json.dumps(records, indent=2),
         encoding="utf-8",

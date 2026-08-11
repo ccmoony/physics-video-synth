@@ -303,6 +303,12 @@ def build_scenario(args: argparse.Namespace) -> dict[str, Any]:
                 "floor_rolling_friction": 0.0110,
                 "floor_spinning_friction": 0.004,
                 "gravity_z": -9.8,
+                # Two-slot presence list, in fixed order (rolling_ball / A,
+                # target_ball / B). A PCVE DELETE edit writes 0 at the
+                # ball's slot; only slot 1 (target) is actually removable --
+                # the whole scene is centred on ball A rolling off the
+                # table, so it is always kept.
+                "active": [1, 1],
             },
         }
     if args.scenario_overrides_json is not None:
@@ -760,6 +766,10 @@ def run_physics(args: argparse.Namespace, scenario: dict) -> dict:
     ):
         command += [flag, str(float(ph[key]))]
 
+    # Ball A always exists in this scene; only ball B is optional.
+    active = ph.get("active", [1, 1])
+    command += ["--ball-b-active", str(int(active[1]))]
+
     subprocess.run(command, check=True)
     data = json.loads(out.read_text(encoding="utf-8"))
     out.unlink(missing_ok=True)
@@ -922,7 +932,13 @@ def build_scene(args: argparse.Namespace, scenario: dict, physics: dict):
                          float(cfg["b"]["hue"]), float(cfg["b"]["saturation"]),
                          float(cfg["b"].get("value", 1.0)))
     apply_keyframes(ball_a, physics["frames"], "ball_a")
-    apply_keyframes(ball_b, physics["frames"], "ball_b")
+    # DELETE edit: ball_b was removed from the sim (present=false, no per-frame
+    # data). Hide the mesh from the render instead of trying to animate it.
+    if physics["objects"]["ball_b"].get("present", True):
+        apply_keyframes(ball_b, physics["frames"], "ball_b")
+    else:
+        ball_b.hide_viewport = True
+        ball_b.hide_render = True
 
     cam_cfg = scenario["camera"]
     bpy.ops.object.camera_add(location=tuple(cam_cfg["location"]))
@@ -996,7 +1012,8 @@ def export_ground_truth(out_dir: Path, ball_a, ball_b, camera, physics: dict,
                        "radius": physics["objects"]["ball_a"]["radius"],
                        "mass": physics["objects"]["ball_a"]["mass"],
                        "inertia": physics["objects"]["ball_a"]["inertia"]},
-            "ball_b": {"object_name": ball_b.name,
+            "ball_b": {"present": bool(physics["objects"]["ball_b"].get("present", True)),
+                       "object_name": ball_b.name,
                        "radius": physics["objects"]["ball_b"]["radius"],
                        "mass": physics["objects"]["ball_b"]["mass"],
                        "inertia": physics["objects"]["ball_b"]["inertia"]},
@@ -1019,6 +1036,7 @@ def export_ground_truth(out_dir: Path, ball_a, ball_b, camera, physics: dict,
         "scenario": scenario,
         "frames": [],
     }
+    ball_b_present = physics["objects"]["ball_b"].get("present", True)
     by_frame = {int(fr["frame_index"]): fr for fr in physics["frames"]}
     for frame in range(1, frame_end + 1):
         scene.frame_set(frame)
@@ -1026,7 +1044,10 @@ def export_ground_truth(out_dir: Path, ball_a, ball_b, camera, physics: dict,
         entry = {"frame_index": frame, "time_sec": (frame - 1) / float(fps),
                  "camera_matrix_world": [[float(v) for v in row]
                                          for row in camera.matrix_world]}
-        for key, obj in (("ball_a", ball_a), ("ball_b", ball_b)):
+        pairs = [("ball_a", ball_a, True)]
+        if ball_b_present:
+            pairs.append(("ball_b", ball_b, True))
+        for key, obj, has_data in pairs:
             entry[key] = {
                 "matrix_world": [[float(v) for v in row] for row in obj.matrix_world],
                 "linear_velocity": pf[key]["linear_velocity"],
@@ -1037,8 +1058,11 @@ def export_ground_truth(out_dir: Path, ball_a, ball_b, camera, physics: dict,
                 "on_table": pf[key]["on_table"],
                 "airborne": pf[key]["airborne"],
             }
+        if not ball_b_present:
+            entry["ball_b"] = {"present": False}
         entry["ball_a"]["phase"] = pf["ball_a"]["phase"]
-        entry["ball_b"]["moving"] = pf["ball_b"]["moving"]
+        if ball_b_present:
+            entry["ball_b"]["moving"] = pf["ball_b"]["moving"]
         records["frames"].append(entry)
     (out_dir / GROUND_TRUTH_NAME).write_text(json.dumps(records, indent=2), encoding="utf-8")
 

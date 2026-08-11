@@ -26,13 +26,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ramp-width", type=float, default=0.16)
     parser.add_argument("--ball-mass", type=float, default=0.05)
     parser.add_argument("--marble-mass", type=float, default=0.05)
+    parser.add_argument("--marble-mass-0", type=float, default=None)
+    parser.add_argument("--marble-mass-1", type=float, default=None)
     parser.add_argument("--marble-radius", type=float, default=0.012)
     parser.add_argument("--floor-friction", type=float, default=0.4)
     parser.add_argument("--ramp-friction", type=float, default=0.7)
     parser.add_argument("--ball-friction", type=float, default=0.45)
     parser.add_argument("--ball-restitution", type=float, default=0.6)
+    parser.add_argument("--ball-rolling-friction", type=float, default=0.002)
     parser.add_argument("--marble-friction", type=float, default=0.15)
     parser.add_argument("--marble-restitution", type=float, default=0.3)
+    # Per-marble on/off (two marbles: 0 = blue, 1 = yellow). 1 = present, 0 = removed.
+    parser.add_argument("--marble-active", nargs=2, type=int, default=(1, 1))
+    parser.add_argument("--marble-initial-velocity-0", nargs=3, type=float, default=(0.0, 0.0, 0.0))
+    parser.add_argument("--marble-initial-velocity-1", nargs=3, type=float, default=(0.0, 0.0, 0.0))
     return parser.parse_args()
 
 
@@ -167,10 +174,22 @@ def simulate(args: argparse.Namespace) -> dict:
             physicsClientId=client,
         )
 
-        marble_ids = []
-        for ml in marble_locations:
+        marble_active = tuple(bool(int(v)) for v in args.marble_active)
+        marble_initial_velocities = (
+            tuple(float(v) for v in args.marble_initial_velocity_0),
+            tuple(float(v) for v in args.marble_initial_velocity_1),
+        )
+        marble_masses = (
+            float(args.marble_mass_0) if args.marble_mass_0 is not None else float(args.marble_mass),
+            float(args.marble_mass_1) if args.marble_mass_1 is not None else float(args.marble_mass),
+        )
+        marble_ids: list[int | None] = []
+        for idx, ml in enumerate(marble_locations):
+            if not marble_active[idx]:
+                marble_ids.append(None)
+                continue
             marble_id = p.createMultiBody(
-                baseMass=float(args.marble_mass),
+                baseMass=marble_masses[idx],
                 baseCollisionShapeIndex=marble_shape,
                 baseVisualShapeIndex=-1,
                 basePosition=ml,
@@ -189,6 +208,14 @@ def simulate(args: argparse.Namespace) -> dict:
                 collisionMargin=0.001,
                 physicsClientId=client,
             )
+            v_init = marble_initial_velocities[idx]
+            if any(abs(component) > 1e-9 for component in v_init):
+                p.resetBaseVelocity(
+                    marble_id,
+                    linearVelocity=v_init,
+                    angularVelocity=(0.0, 0.0, 0.0),
+                    physicsClientId=client,
+                )
             marble_ids.append(marble_id)
 
         ball_shape = p.createCollisionShape(p.GEOM_SPHERE, radius=radius, physicsClientId=client)
@@ -205,7 +232,7 @@ def simulate(args: argparse.Namespace) -> dict:
             -1,
             lateralFriction=float(args.ball_friction),
             spinningFriction=0.02,
-            rollingFriction=0.002,
+            rollingFriction=float(args.ball_rolling_friction),
             restitution=float(args.ball_restitution),
             linearDamping=0.05,
             angularDamping=0.05,
@@ -226,7 +253,17 @@ def simulate(args: argparse.Namespace) -> dict:
             ball_floor_gap = ball_pos[2] - radius
 
             marble_data = []
-            for ml_id in marble_ids:
+            for idx, ml_id in enumerate(marble_ids):
+                if ml_id is None:
+                    marble_data.append({
+                        "active": False,
+                        "location": list(marble_locations[idx]),
+                        "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0],
+                        "linear_velocity": [0.0, 0.0, 0.0],
+                        "angular_velocity": [0.0, 0.0, 0.0],
+                        "gap_to_ball": None,
+                    })
+                    continue
                 mpos, mquat = p.getBasePositionAndOrientation(ml_id, physicsClientId=client)
                 mlin, mang = p.getBaseVelocity(ml_id, physicsClientId=client)
                 dx = ball_pos[0] - mpos[0]
@@ -236,6 +273,7 @@ def simulate(args: argparse.Namespace) -> dict:
                 gap = dist - radius - marble_radius
                 min_ball_marble_gap = min(min_ball_marble_gap, gap)
                 marble_data.append({
+                    "active": True,
                     "location": list(mpos),
                     "quaternion_xyzw": list(mquat),
                     "linear_velocity": list(mlin),
@@ -284,7 +322,10 @@ def simulate(args: argparse.Namespace) -> dict:
                     "radius": marble_radius,
                     "count": len(marble_locations),
                     "mass": float(args.marble_mass),
+                    "masses": list(marble_masses),
                     "initial_locations": [list(ml) for ml in marble_locations],
+                    "active": [bool(v) for v in marble_active],
+                    "initial_velocities": [list(v) for v in marble_initial_velocities],
                     "friction": float(args.marble_friction),
                     "restitution": float(args.marble_restitution),
                 },

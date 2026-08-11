@@ -256,6 +256,12 @@ def build_scenario(args: argparse.Namespace) -> dict[str, Any]:
             "ball_b_restitution": 0.80,
             "ball_b_friction": 1.0,
             "gravity_z": -9.8,
+            # Whether the target football is in the scene at all. A one-element
+            # list rather than a bare int so the PCVE edit DSL can write it by
+            # index, matching the other scenes' active flags. Set to [0] and
+            # the ball is left out of both the simulation and the render, and
+            # the rebound simply crosses empty floor.
+            "ball_b_active": [1],
         },
     }
     if args.scenario_overrides_json is not None:
@@ -538,6 +544,18 @@ def apply_keyframes(obj: bpy.types.Object, frames: list, key: str) -> None:
 
 # --- Physics ------------------------------------------------------------------
 
+def ball_b_active(physics: dict) -> bool:
+    """Is the target football part of this scenario?
+
+    Stored as a one-element list so the PCVE edit DSL can write it by index,
+    but a hand-written scenario JSON may well say ``"ball_b_active": 0``.
+    """
+    value = physics.get("ball_b_active", [1])
+    if isinstance(value, (list, tuple)):
+        return bool(int(value[0])) if value else True
+    return bool(int(value))
+
+
 def run_physics(args: argparse.Namespace, scenario: dict) -> dict:
     physics_python = WORKSPACE_DIR.parent / "miniconda" / "envs" / "physics" / "bin" / "python"
     python = str(physics_python) if physics_python.exists() else (
@@ -581,6 +599,10 @@ def run_physics(args: argparse.Namespace, scenario: dict) -> dict:
     ):
         command += [flag, str(float(ph[key]))]
 
+    ball_b_present = ball_b_active(ph)
+    if not ball_b_present:
+        command += ["--disable-ball-b"]
+
     subprocess.run(command, check=True)
     data = json.loads(out.read_text(encoding="utf-8"))
     out.unlink(missing_ok=True)
@@ -588,7 +610,10 @@ def run_physics(args: argparse.Namespace, scenario: dict) -> dict:
     q = data["quality"]
     if not q["hit_chest"]:
         print("[WARN] The ball never reached the toy chest in this scenario.")
-    if not q["hit_ball_b"]:
+    # Only a miss is worth warning about. With the target ball deliberately
+    # removed there is nothing to hit, and the warning would fire on every
+    # frame of a case that is behaving exactly as intended.
+    if ball_b_present and not q["hit_ball_b"]:
         print("[WARN] The rebounding ball missed the target ball.")
     if q["spinning_on_the_spot"]:
         print(f"[WARN] A ball is still turning where it stopped: "
@@ -597,9 +622,17 @@ def run_physics(args: argparse.Namespace, scenario: dict) -> dict:
         print(f"[WARN] A ball reached the lid/basket/bear at frame "
               f"{q['prop_contact_frame']}; only the chest is meant to be touched.")
     if q["left_floor"] is not None:
-        print(f"[WARN] {q['left_floor']['ball']} ran off the room's floorboards "
-              f"at frame {q['left_floor']['frame']}; the set has no floor there.")
-    if q["ball_a_settled_frame"] is None or q["ball_b_settled_frame"] is None:
+        # Not a missing floor -- the laid-in hardwood plane is 9 m across. What
+        # the ball has left is the dressed room, and at this camera that means
+        # it is on its way out of frame. Expected for cases where nothing stops
+        # the ball, e.g. with the target football deleted.
+        print(f"[NOTE] {q['left_floor']['ball']} left the dressed room area at "
+              f"frame {q['left_floor']['frame']}; it is still on rendered floor "
+              f"but is heading out of shot.")
+    unsettled = q["ball_a_settled_frame"] is None or (
+        ball_b_present and q["ball_b_settled_frame"] is None
+    )
+    if unsettled:
         print("[WARN] A ball was still moving at the last frame; it never settles on camera.")
     return data
 
@@ -660,9 +693,16 @@ def build_scene(args: argparse.Namespace, scenario: dict, physics: dict):
     import_room()
     build_hardwood_floor()
     ball_a = extract_ball(BALL_A_OBJECT, BALL_A_DIAMETER, "ball_a_star")
-    ball_b = extract_ball(BALL_B_OBJECT, BALL_B_DIAMETER, "ball_b_football")
+    # A DELETE edit leaves the football out of the render entirely rather than
+    # hiding it, so the .blend matches the video.
+    ball_b = (
+        extract_ball(BALL_B_OBJECT, BALL_B_DIAMETER, "ball_b_football")
+        if ball_b_active(scenario["physics"])
+        else None
+    )
     apply_keyframes(ball_a, physics["frames"], "ball_a")
-    apply_keyframes(ball_b, physics["frames"], "ball_b")
+    if ball_b is not None:
+        apply_keyframes(ball_b, physics["frames"], "ball_b")
 
     cam_cfg = scenario["camera"]
     bpy.ops.object.camera_add(location=tuple(cam_cfg["location"]))
@@ -716,8 +756,15 @@ def export_ground_truth(out_dir: Path, ball_a, ball_b, camera, physics: dict,
         "objects": {
             "ball_a": {"object_name": ball_a.name,
                        "radius": physics["objects"]["ball_a"]["radius"]},
-            "ball_b": {"object_name": ball_b.name,
-                       "radius": physics["objects"]["ball_b"]["radius"]},
+            # A deleted football keeps its slot with present=false rather than
+            # vanishing, so a consumer diffing an edit against its source sees
+            # the same object keys on both sides.
+            "ball_b": (
+                {"present": False, "object_name": None}
+                if ball_b is None
+                else {"present": True, "object_name": ball_b.name,
+                      "radius": physics["objects"]["ball_b"]["radius"]}
+            ),
             "chest_face": {"slope": CHEST_FACE_SLOPE, "x_range": list(CHEST_FACE_X)},
         },
         "camera": {
@@ -735,7 +782,8 @@ def export_ground_truth(out_dir: Path, ball_a, ball_b, camera, physics: dict,
         pf = by_frame[frame]
         entry = {"frame_index": frame, "time_sec": (frame - 1) / float(fps),
                  "camera_matrix_world": [[float(v) for v in row] for row in camera.matrix_world]}
-        for key, obj in (("ball_a", ball_a), ("ball_b", ball_b)):
+        present = [("ball_a", ball_a)] + ([("ball_b", ball_b)] if ball_b is not None else [])
+        for key, obj in present:
             entry[key] = {
                 "matrix_world": [[float(v) for v in row] for row in obj.matrix_world],
                 "linear_velocity": pf[key]["linear_velocity"],
@@ -743,7 +791,11 @@ def export_ground_truth(out_dir: Path, ball_a, ball_b, camera, physics: dict,
                 "speed": pf[key]["speed"],
             }
         entry["ball_a"]["phase"] = pf["ball_a"]["phase"]
-        entry["ball_b"]["moving"] = pf["ball_b"]["moving"]
+        if ball_b is None:
+            entry["ball_b"] = {"present": False}
+        else:
+            entry["ball_b"]["present"] = True
+            entry["ball_b"]["moving"] = pf["ball_b"]["moving"]
         records["frames"].append(entry)
     (out_dir / GROUND_TRUTH_NAME).write_text(json.dumps(records, indent=2), encoding="utf-8")
 

@@ -112,6 +112,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=31)
     parser.add_argument("--launch-speed", type=float, default=2.0)
     parser.add_argument("--gap-width", type=float, default=0.28)
+    parser.add_argument(
+        "--car-friction", type=float, default=0.45,
+        help="Forwarded to simulate_car_gap_jump.py; see there for defaults.",
+    )
     return parser.parse_args(argv)
 
 
@@ -582,6 +586,7 @@ def run_physics(args: argparse.Namespace) -> dict:
             "--duration-sec", str(float(args.duration_sec)),
             "--launch-speed", str(float(args.launch_speed)),
             "--gap-width", str(float(args.gap_width)),
+            "--car-friction", str(float(args.car_friction)),
         ],
         check=True,
     )

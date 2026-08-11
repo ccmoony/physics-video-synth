@@ -75,6 +75,11 @@ def parse_args() -> argparse.Namespace:
         help="Ball's starting x position, near the shelf's left edge.",
     )
     parser.add_argument("--gravity-z", type=float, default=-9.8)
+    # PCVE DELETE edit for the ball: 0 removes the ball entirely; the frame
+    # slot still appears in the output (frozen at its start pose,
+    # present=false) so consumers keep a fixed layout. The car is always
+    # present -- the whole sim is centred on its drive across the table.
+    parser.add_argument("--ball-active", type=int, default=1)
     return parser.parse_args()
 
 
@@ -157,27 +162,31 @@ def simulate(args: argparse.Namespace) -> dict:
             physicsClientId=client,
         )
 
-        ball_shape = p.createCollisionShape(
-            p.GEOM_SPHERE, radius=BALL_RADIUS, physicsClientId=client,
-        )
-        ball_id = p.createMultiBody(
-            baseMass=float(args.ball_mass),
-            baseCollisionShapeIndex=ball_shape,
-            baseVisualShapeIndex=-1,
-            basePosition=(float(args.ball_start_x), SHELF_DEPTH_Y, TABLE_Z + BALL_RADIUS),
-            physicsClientId=client,
-        )
-        p.changeDynamics(
-            ball_id, -1,
-            lateralFriction=float(args.ball_friction),
-            spinningFriction=0.01,
-            rollingFriction=0.002,
-            restitution=float(args.ball_restitution),
-            linearDamping=0.0,
-            angularDamping=0.05,
-            collisionMargin=0.0005,
-            physicsClientId=client,
-        )
+        ball_active = bool(int(args.ball_active))
+        ball_id = None
+        ball_start_pos = (float(args.ball_start_x), SHELF_DEPTH_Y, TABLE_Z + BALL_RADIUS)
+        if ball_active:
+            ball_shape = p.createCollisionShape(
+                p.GEOM_SPHERE, radius=BALL_RADIUS, physicsClientId=client,
+            )
+            ball_id = p.createMultiBody(
+                baseMass=float(args.ball_mass),
+                baseCollisionShapeIndex=ball_shape,
+                baseVisualShapeIndex=-1,
+                basePosition=ball_start_pos,
+                physicsClientId=client,
+            )
+            p.changeDynamics(
+                ball_id, -1,
+                lateralFriction=float(args.ball_friction),
+                spinningFriction=0.01,
+                rollingFriction=0.002,
+                restitution=float(args.ball_restitution),
+                linearDamping=0.0,
+                angularDamping=0.05,
+                collisionMargin=0.0005,
+                physicsClientId=client,
+            )
 
         frames = []
         ball_left_table = False
@@ -190,12 +199,19 @@ def simulate(args: argparse.Namespace) -> dict:
 
             car_pos, car_quat = p.getBasePositionAndOrientation(car_id, physicsClientId=client)
             car_lin, car_ang = p.getBaseVelocity(car_id, physicsClientId=client)
-            ball_pos, ball_quat = p.getBasePositionAndOrientation(ball_id, physicsClientId=client)
-            ball_lin, ball_ang = p.getBaseVelocity(ball_id, physicsClientId=client)
+            if ball_id is not None:
+                ball_pos, ball_quat = p.getBasePositionAndOrientation(ball_id, physicsClientId=client)
+                ball_lin, ball_ang = p.getBaseVelocity(ball_id, physicsClientId=client)
+                ball_present = True
+            else:
+                ball_pos, ball_quat = ball_start_pos, (0.0, 0.0, 0.0, 1.0)
+                ball_lin, ball_ang = (0.0, 0.0, 0.0), (0.0, 0.0, 0.0)
+                ball_present = False
 
-            ball_min_x = min(ball_min_x, ball_pos[0])
-            if ball_pos[0] < -TABLE_HALF_X:
-                ball_left_table = True
+            if ball_present:
+                ball_min_x = min(ball_min_x, ball_pos[0])
+                if ball_pos[0] < -TABLE_HALF_X:
+                    ball_left_table = True
 
             frames.append({
                 "frame_index": frame_index,
@@ -207,6 +223,7 @@ def simulate(args: argparse.Namespace) -> dict:
                     "angular_velocity": list(car_ang),
                 },
                 "ball": {
+                    "present": ball_present,
                     "location": list(ball_pos),
                     "quaternion_xyzw": list(ball_quat),
                     "linear_velocity": list(ball_lin),
@@ -247,6 +264,7 @@ def simulate(args: argparse.Namespace) -> dict:
                     "radius": BALL_RADIUS,
                     "mass": float(args.ball_mass),
                     "start_x": float(args.ball_start_x),
+                    "present": ball_active,
                 },
                 "table": {
                     "half_extents": [TABLE_HALF_X, TABLE_HALF_Y, TABLE_THICKNESS / 2.0],

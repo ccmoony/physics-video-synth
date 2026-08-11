@@ -105,7 +105,12 @@ the rendered furniture, and touching any of it raises a warning.
   applies the physics trajectory as keyframes. Also owns the collider export.
 - `cam_survey.py` -- renders the camera survey (10 framings x 4 key frames).
 - `batch_render_ball_box_rebound.py` -- orchestrates multiple renders.
-- `build_pcve_ball_box_rebound.py` -- builds the five-case PCVE suite.
+- `edit_vocab.py` -- the scene's PCVE edit vocabulary: which objects and
+  properties may be edited, how each maps to a simulator parameter, and the
+  baseline physics values. Must stay in sync with
+  `render_ball_box_rebound.create_scenario()`.
+- `build_pcve_ball_box_rebound.py` -- builds the PCVE edit suite: one source
+  video plus one variant per edit-DSL string.
 
 ## Quick start
 
@@ -174,24 +179,87 @@ python scripts/ball_box_rebound/build_pcve_ball_box_rebound.py \
   --resolution 1280 720 --fps 24 --samples 64 --device auto
 ```
 
-Four cases hold the push fixed at 2.60 m/s and vary only the chest's
-restitution, so all four meet the panel at the same point, at the same 2.36 m/s,
-at the same 30 deg, and differ only in the angle they leave at. The fifth is the
-distractor: it restores the hero's chest and softens the push instead, which
-leaves the rebound angle alone and reproduces `clips_target`'s outcome for a
-completely different reason.
+One source video plus N edited variants. Every edit is declared as a **single
+edit-DSL string** in `EDIT_CASES`, and the natural-language prompts (vague +
+quantitative, zh + en), the scenario overrides handed to the renderer, and the
+manifest's `physics_diff` are all derived from that one string by
+`scripts/pcve_edit_dsl.py` against `edit_vocab.py`. Nothing about the edit is
+written twice, so a prompt cannot drift from the physics it describes.
 
-| case_id | chest restitution | push (m/s) | rebound angle | outcome |
-|---|---|---|---|---|
-| `ball_box_rebound_knocks_target` | 0.80 | 2.60 | 29.2 deg | **Hero.** Crosses to the football and knocks it 0.30 m clear. |
-| `ball_box_rebound_clips_target` | 0.62 | 2.60 | 35.5 deg | Only clips it; the football moves 0.12 m and the roller carries on past. |
-| `ball_box_rebound_misses_target` | 0.48 | 2.60 | 42.2 deg | Goes wide. Nothing else changed. |
-| `ball_box_rebound_dead_box` | 0.22 | 2.60 | 61.2 deg | Skims away along the front of the chest; never goes near the football. |
-| `ball_box_rebound_soft_push` | 0.80 | 2.15 | 30.1 deg | **Distractor.** Same angle as the hero -- speed does not bend a rebound -- but arrives slowly and nudges the football 0.12 m, the same outcome as `clips_target`. |
+An edit may only **delete one object** or **set one scalar property** on one
+object. The camera, the lighting, the aim, the seed and the layout are
+identical across every case, and every case is 3.0 s long -- the only thing
+that varies in frame is the motion.
 
-The manifest records each case's *outcome* (rebound angle, whether the target
-was reached, how far it went, resting positions) read back out of the rendered
-ground truth, not just its inputs.
+Editable objects are `ball_a` (the star ball), `ball_b` (the football) and
+`chest`. Editable properties are `mass`, `friction`, `restitution`, and
+`initial_velocity` on `ball_a`, which is the push. The `chest` only exposes
+`restitution` -- its friction is saturated and editing it would be invisible.
+Only `ball_b` can be deleted. The floor is deliberately **not** editable
+(edits name a moving object; nothing is lost -- see the traps below), and
+the aim (`launch_heading_deg`) is not editable either: re-aiming the shot is
+a different scene, not an edit to this one.
+
+Source: the ball meets the panel on **frame 13 at 2.36 m/s and 30 deg**, leaves
+at **29.2 deg and 1.72 m/s**, and hits the football on **frame 24**, knocking it
+**0.30 m** clear. Both balls settle by frame 45. Every value below came from
+sweeping the simulator directly.
+
+| case_id | edit_dsl | outcome |
+|---|---|---|
+| `ball_box_rebound_baseline` | – (source) | See above. |
+| `edit_dead_chest` | `SET chest.restitution FROM 0.8 TO 0.35` | Same point, same 2.36 m/s, same 30 deg in -- but **50.4 deg out**. Runs along the front of the chest and past the football, which never moves. |
+| `edit_dead_ball` | `SET ball_a.restitution FROM 0.88 TO 0.2` | The same loss of bounce put on the ball instead. Pair restitution 0.16 vs the chest edit's 0.28, so flatter still: **64.9 deg out**, missing by more. |
+| `edit_soft_push` | `SET ball_a.initial_velocity FROM 2.6 TO 1.95` | **Distractor.** Rebound angle untouched (29.4 deg) -- speed does not bend a rebound. Still reaches the football but nudges it 0.05 m, on frame 38 instead of 24. |
+| `edit_draggy_ball` | `SET ball_a.friction FROM 1 TO 5` | A tacky ball, not a changed floor: effective rolling resistance 0.006 -> 0.030. Arrives at the chest on frame 18 at 0.85 m/s. Still bounces at 30.0 deg but dies before the football; settled by frame 22. |
+| `edit_heavy_target` | `SET ball_b.mass FROM 0.09 TO 0.9` | Roll, bounce and rebound line identical; the football moves 0.013 m instead of 0.300 and the star ball rebounds back off it at 0.57 m/s. |
+| `edit_heavy_ball` | `SET ball_a.mass FROM 0.12 TO 1.2` | Bounce unchanged (restitution sets it, not mass); the football leaves at 1.65 m/s and travels 0.84 m while the star ball carries on through. |
+| `edit_remove_target` | `DELETE ball_b` | Roll and bounce identical, then the rebound crosses empty floor and rolls out of the bottom of frame around frame 48. The last second is bare floor. |
+
+Three things worth knowing before adding an edit here:
+
+- **A bounce scales only the normal component.** That is the whole scene: less
+  restitution means a *flatter exit angle*, not merely a slower one. It is also
+  why `edit_soft_push` is worth rendering -- it produces a weak outcome with the
+  angle left alone.
+- **Restitutions multiply.** `ball_a x chest = 0.88 x 0.80 = 0.70` at baseline,
+  so a prompt's number is never the number that governs the bounce. This is why
+  `edit_dead_chest` (0.35 -> pair 0.28) and `edit_dead_ball` (0.2 -> pair 0.16)
+  land at different angles rather than duplicating each other.
+- **`friction` is one knob per object, and it does the whole story.** The
+  vocabulary binds `friction` compound-style; on both balls the rolling
+  coefficient baseline is 0, so scaling `friction` scales only the lateral
+  side. That is not a problem: Bullet combines rolling resistance as
+  `rf_a * lateral_b + rf_b * lateral_a`, so with the ball at `rf = 0` the
+  effective rolling resistance on the floor is `floor_rolling_friction *
+  ball_a_friction`. Raising `ball_a.friction` from 1 to 5 therefore reproduces
+  raising the floor's rolling friction from 0.006 to 0.03 exactly -- verified
+  identical to the millimetre -- and, unlike the floor edit, it leaves the
+  bounce off the chest untouched.
+
+Adding or changing an edit:
+
+```bash
+# 1. sweep the sim directly first -- no Blender, no rendering
+python scripts/ball_box_rebound/simulate_ball_box_rebound.py \
+    --out /tmp/s.json \
+    --chest-collider assets/collision/toy_box_chest.obj \
+    --props-collider assets/collision/toy_box_props.obj \
+    --launch-x -0.744 --launch-y 1.030 --launch-speed 2.60 \
+    --launch-heading-deg 303.74 --ball-b-x 0.358 --ball-b-y 0.660 \
+    --ball-a-radius 0.080 --ball-b-radius 0.065 \
+    --chest-restitution 0.35
+# 2. add an EditCase to EDIT_CASES, then check what it generates
+python scripts/ball_box_rebound/build_pcve_ball_box_rebound.py \
+    --dry-run --out-root /tmp/dryrun
+# 3. render only what is new; --clean-stale-cases rm -rf's dropped cases
+python scripts/ball_box_rebound/build_pcve_ball_box_rebound.py --skip-existing
+```
+
+The simulator prints a one-line `[SIM]` summary carrying the contact frames,
+the incidence and reflection angles, both balls' speeds and travel, and the
+resting positions -- that is what a sweep should be read off, and the build
+script echoes it plus any `[WARN]`/`[NOTE]` for each rendered case.
 
 ## Scene layout
 

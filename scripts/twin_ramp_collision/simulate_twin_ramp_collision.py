@@ -91,6 +91,20 @@ def parse_args() -> argparse.Namespace:
         help="Extra inset applied to the -x ball only, so the setup is not perfectly symmetric.",
     )
     parser.add_argument("--gravity-z", type=float, default=-9.8)
+
+    # ---- Per-ball overrides (the PCVE edit surface) -----------------------
+    # ball_a is the +X side (rendered purple), ball_b is the -X side (yellow).
+    # Left at None each falls back to the corresponding global (--ball-*)
+    # value, which reproduces the pre-PCVE behaviour exactly.
+    for prefix in ("ball-a", "ball-b"):
+        parser.add_argument(f"--{prefix}-mass", type=float, default=None)
+        parser.add_argument(f"--{prefix}-friction", type=float, default=None)
+        parser.add_argument(f"--{prefix}-restitution", type=float, default=None)
+        parser.add_argument(f"--{prefix}-rolling-friction", type=float, default=None)
+    # 0 removes that ball from the sim entirely; its frame slot still
+    # appears in the output (frozen at its start pose, present=false).
+    parser.add_argument("--ball-a-active", type=int, default=1)
+    parser.add_argument("--ball-b-active", type=int, default=1)
     return parser.parse_args()
 
 
@@ -198,13 +212,28 @@ def simulate(args: argparse.Namespace) -> dict:
                 restitution=float(args.track_restitution),
             )
 
+        # Resolve per-ball values: side 1 = ball_a, side -1 = ball_b.
+        def resolve(prefix: str, key: str) -> float:
+            v = getattr(args, f"{prefix}_{key}", None)
+            return float(v) if v is not None else float(getattr(args, f"ball_{key}"))
+
+        side_prefix = {1: "ball_a", -1: "ball_b"}
+        side_active = {
+            1: bool(int(args.ball_a_active)),
+            -1: bool(int(args.ball_b_active)),
+        }
+
         ball_shape = p.createCollisionShape(
             p.GEOM_SPHERE, radius=radius, physicsClientId=client,
         )
-        ball_ids = {}
+        ball_ids: dict[int, int | None] = {}
         for side in (1, -1):
+            if not side_active[side]:
+                ball_ids[side] = None
+                continue
+            pfx = side_prefix[side]
             body = p.createMultiBody(
-                baseMass=float(args.ball_mass),
+                baseMass=resolve(pfx, "mass"),
                 baseCollisionShapeIndex=ball_shape,
                 baseVisualShapeIndex=-1,
                 basePosition=releases[side],
@@ -213,10 +242,10 @@ def simulate(args: argparse.Namespace) -> dict:
             )
             p.changeDynamics(
                 body, -1,
-                lateralFriction=float(args.ball_friction),
-                rollingFriction=float(args.ball_rolling_friction),
+                lateralFriction=resolve(pfx, "friction"),
+                rollingFriction=resolve(pfx, "rolling_friction"),
                 spinningFriction=float(args.ball_spinning_friction),
-                restitution=float(args.ball_restitution),
+                restitution=resolve(pfx, "restitution"),
                 linearDamping=float(args.ball_linear_damping),
                 angularDamping=float(args.ball_angular_damping),
                 collisionMargin=0.0005,
@@ -224,7 +253,13 @@ def simulate(args: argparse.Namespace) -> dict:
             )
             ball_ids[side] = body
 
+        both_present = ball_ids[1] is not None and ball_ids[-1] is not None
+
         def ball_gap() -> tuple[float, tuple, tuple]:
+            if not both_present:
+                # No pair to measure; return a sentinel so the min-gap logic
+                # simply never triggers a contact.
+                return (float("inf"), (0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
             pos_a, _ = p.getBasePositionAndOrientation(ball_ids[1], physicsClientId=client)
             pos_b, _ = p.getBasePositionAndOrientation(ball_ids[-1], physicsClientId=client)
             return math.dist(pos_a, pos_b) - 2.0 * radius, pos_a, pos_b
@@ -248,16 +283,17 @@ def simulate(args: argparse.Namespace) -> dict:
                 # never having touched even in runs where they visibly rebound.
                 for _ in range(substeps):
                     p.stepSimulation(physicsClientId=client)
-                    gap_now, pos_a_now, pos_b_now = ball_gap()
-                    if gap_now < min_gap:
-                        min_gap = gap_now
-                    if p.getContactPoints(
-                        bodyA=ball_ids[1], bodyB=ball_ids[-1], physicsClientId=client,
-                    ):
-                        touched_this_frame = True
-                        if contact_frame is None:
-                            contact_frame = frame_index
-                            contact_x = 0.5 * (pos_a_now[0] + pos_b_now[0])
+                    if both_present:
+                        gap_now, pos_a_now, pos_b_now = ball_gap()
+                        if gap_now < min_gap:
+                            min_gap = gap_now
+                        if p.getContactPoints(
+                            bodyA=ball_ids[1], bodyB=ball_ids[-1], physicsClientId=client,
+                        ):
+                            touched_this_frame = True
+                            if contact_frame is None:
+                                contact_frame = frame_index
+                                contact_x = 0.5 * (pos_a_now[0] + pos_b_now[0])
 
             record = {
                 "frame_index": frame_index,
@@ -265,8 +301,22 @@ def simulate(args: argparse.Namespace) -> dict:
                 "released": frame_index > hold_frames,
                 "balls": {},
             }
-            state = {}
+            state: dict[str, tuple] = {}
             for name, side in (("a", 1), ("b", -1)):
+                if ball_ids[side] is None:
+                    # DELETE edit: emit a frozen slot with present=false.
+                    frozen_pos = releases[side]
+                    record["balls"][name] = {
+                        "side": side,
+                        "present": False,
+                        "location": list(frozen_pos),
+                        "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0],
+                        "linear_velocity": [0.0, 0.0, 0.0],
+                        "angular_velocity": [0.0, 0.0, 0.0],
+                        "speed": 0.0,
+                        "height_above_track": frozen_pos[2] - track.track_z - radius,
+                    }
+                    continue
                 pos, quat = p.getBasePositionAndOrientation(
                     ball_ids[side], physicsClientId=client,
                 )
@@ -275,6 +325,7 @@ def simulate(args: argparse.Namespace) -> dict:
                 state[name] = (pos, lin, speed)
                 record["balls"][name] = {
                     "side": side,
+                    "present": True,
                     "location": list(pos),
                     "quaternion_xyzw": list(quat),
                     "linear_velocity": list(lin),
@@ -285,9 +336,17 @@ def simulate(args: argparse.Namespace) -> dict:
                 if abs(pos[1]) > track.plank_width / 2.0 or pos[2] < track.track_z - radius:
                     left_track = True
 
-            (pos_a, _, speed_a) = state["a"]
-            (pos_b, _, speed_b) = state["b"]
-            gap = math.dist(pos_a, pos_b) - 2.0 * radius
+            if "a" in state and "b" in state:
+                (pos_a, _, speed_a) = state["a"]
+                (pos_b, _, speed_b) = state["b"]
+                gap = math.dist(pos_a, pos_b) - 2.0 * radius
+            else:
+                # One ball is deleted; leave collision-metric fields as
+                # sentinels so the quality block downstream reports nothing
+                # rather than lying.
+                pos_a = pos_b = None
+                speed_a = speed_b = 0.0
+                gap = float("inf")
             record["gap_between_balls"] = gap
             record["in_contact"] = touched_this_frame
             if gap < min_gap:
@@ -340,14 +399,22 @@ def simulate(args: argparse.Namespace) -> dict:
                 "ball_a": {
                     "side": 1,
                     "radius": radius,
-                    "mass": float(args.ball_mass),
+                    "mass": resolve("ball_a", "mass"),
+                    "friction": resolve("ball_a", "friction"),
+                    "restitution": resolve("ball_a", "restitution"),
+                    "rolling_friction": resolve("ball_a", "rolling_friction"),
                     "initial_location": list(releases[1]),
+                    "present": side_active[1],
                 },
                 "ball_b": {
                     "side": -1,
                     "radius": radius,
-                    "mass": float(args.ball_mass),
+                    "mass": resolve("ball_b", "mass"),
+                    "friction": resolve("ball_b", "friction"),
+                    "restitution": resolve("ball_b", "restitution"),
+                    "rolling_friction": resolve("ball_b", "rolling_friction"),
                     "initial_location": list(releases[-1]),
+                    "present": side_active[-1],
                 },
                 "ball_material": {
                     "friction": float(args.ball_friction),

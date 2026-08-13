@@ -16,8 +16,8 @@ import pcve_edit_dsl as dsl  # noqa: E402
 
 
 # Must stay in sync with render_tennis_flight.create_scenario().
-# Single flying tennis ball -- launched from (-8, -3, 5) with initial
-# velocity (9.973, 0, 0) m/s -- arcs under gravity, lands, and rolls.
+# Single flying tennis ball -- launched from (-4, 0, 1.5) with initial
+# velocity (4.5, 0, 4.5) m/s -- arcs over the net at x=0, lands, and rolls.
 BASELINE_PHYSICS = {
     "ball_radius": 0.033,
     "ball_mass": 0.057,
@@ -25,8 +25,8 @@ BASELINE_PHYSICS = {
     "ball_restitution": 0.05,
     "ball_rolling_friction": 0.015,
     "floor_friction": 0.6,
-    "launch_location": [-8.0, -3.0, 5.0],
-    "launch_velocity": [9.973, 0.0, 0.0],
+    "launch_location": [-4.0, 0.0, 1.5],
+    "launch_velocity": [4.5, 0.0, 4.5],
     "gravity": [0.0, 0.0, -9.8],
 }
 
@@ -68,7 +68,8 @@ SIM_BINDINGS = {
     )),
     ("ball", "restitution"): dsl.SimBinding("ball_restitution"),
     # launch_velocity is a 3-vector; the +X component dominates (baseline
-    # 9.973 m/s along the court, no lateral or vertical component).
+    # 4.5 m/s down the court, plus a 4.5 m/s vertical component to arc
+    # over the net). The DSL knob only edits the +X speed.
     ("ball", "initial_velocity"): dsl.SimBinding("launch_velocity", index=0),
 }
 

@@ -731,11 +731,20 @@ def run_physics(args: argparse.Namespace, scenario: dict) -> dict:
                   f"impact at e = {c['effective_restitution']:.2f} and "
                   f"{c['obliquity_deg']:.1f} deg predicts {predicted:.3f}. "
                   "One of them is wrong.")
-    print(f"[INFO] {c['size_ratio']:.2f}:1 in diameter is {c['mass_ratio']:.2f}:1 in "
-          f"mass; the struck marble left at {c['measured_b_speed_ratio']:.3f} x the "
-          f"approach speed (closed form {c['predicted']['b_speed_ratio']:.3f}) and "
-          f"the big one kept {c['measured_a_speed_ratio']:.3f} "
-          f"({c['predicted']['a_speed_ratio']:.3f}).")
+    # The measured ratios only exist if the marbles actually met. A scenario
+    # where they do not is a legitimate one to render -- the soft-push edit is
+    # exactly that, and the warning above has already said so -- so report the
+    # geometry and leave the closed form uncompared rather than formatting None.
+    if c["measured_b_speed_ratio"] is None or c["measured_a_speed_ratio"] is None:
+        print(f"[INFO] {c['size_ratio']:.2f}:1 in diameter is "
+              f"{c['mass_ratio']:.2f}:1 in mass; no contact this run, so there "
+              f"is no measured speed ratio to check the closed form against.")
+    else:
+        print(f"[INFO] {c['size_ratio']:.2f}:1 in diameter is {c['mass_ratio']:.2f}:1 in "
+              f"mass; the struck marble left at {c['measured_b_speed_ratio']:.3f} x the "
+              f"approach speed (closed form {c['predicted']['b_speed_ratio']:.3f}) and "
+              f"the big one kept {c['measured_a_speed_ratio']:.3f} "
+              f"({c['predicted']['a_speed_ratio']:.3f}).")
     return data
 
 

@@ -63,11 +63,12 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id='edit_gentle_launch',
         source_case_id=SOURCE_CASE_ID,
         seed=9101,
-        dsl='SET stones.initial_velocity FROM 0.9 TO 0.4',
+        dsl='SET stones.initial_velocity FROM 1.5 TO 0.5',
         edit_summary=(
-            'Both stones launched at less than half the source speed. Ice '
+            'Both stones launched at one-third of the source speed. Ice '
             'friction bleeds them off before they meet: they stop about '
-            '0.3 m apart and never collide, instead of meeting dead-centre.'
+            '2.2 m apart at +/-1.12 m, never colliding at all, instead of '
+            'meeting head-on around frame 39.'
         ),
     ),
     # --- per-stone mass edits ------------------------------------------
@@ -77,10 +78,10 @@ EDIT_CASES: tuple[EditCase, ...] = (
         seed=9102,
         dsl='SET yellow_stone.mass FROM 20.0 TO 60.0',
         edit_summary=(
-            'Yellow stone made 3x heavier. The head-on impact stops mattering '
-            'symmetrically: the yellow one barely gives ground (final_x=-0.31), '
-            'while the red one bounces back past its starting side and ends '
-            'at -0.83 -- the opposite of the source, where they die at centre.'
+            'Yellow stone made 3x heavier. The head-on impact is no longer '
+            'balanced: yellow only gives ground to -0.78 m, while red rebounds '
+            'clear past its own side to -1.30 m -- the opposite of the source, '
+            'where both stones die at centre.'
         ),
     ),
     EditCase(
@@ -90,9 +91,9 @@ EDIT_CASES: tuple[EditCase, ...] = (
         dsl='SET yellow_stone.mass FROM 20.0 TO 4.0',
         edit_summary=(
             'Yellow stone made 5x lighter. Momentum from the red stone shoves '
-            'it clear across the ice to +1.20 m, while the red stone barely '
-            'slows and continues in the same direction to +0.68 -- the mirror '
-            'of edit_heavy_yellow, with the light stone doing the flying.'
+            'it clear across the ice to +1.76 m, while the red stone barely '
+            'slows and keeps going to +1.11 m -- the mirror of '
+            'edit_heavy_yellow, with the light stone doing the flying.'
         ),
     ),
     # --- per-stone velocity edits (asymmetric launch) -------------------
@@ -100,39 +101,39 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id='edit_red_hard_throw',
         source_case_id=SOURCE_CASE_ID,
         seed=9104,
-        dsl='SET red_stone.initial_velocity FROM 0.9 TO 1.8',
+        dsl='SET red_stone.initial_velocity FROM 1.5 TO 3.0',
         edit_summary=(
-            'Red stone launched twice as fast; yellow still 0.9 m/s. The '
-            'head-on impact is one-sided: red carries far more momentum, and '
-            'after the collision both stones end up well past centre on the '
-            "yellow side (red +1.48, yellow +1.98) -- the source's dead-stop "
-            'symmetry is broken.'
+            'Red stone launched twice as fast; yellow still 1.5 m/s. The '
+            'head-on impact is one-sided and happens earlier (frame 26): red '
+            'carries far more momentum, and both stones end up well past '
+            'centre on the yellow side (red +1.90, yellow +2.46) -- the '
+            "source's centred stop is broken."
         ),
     ),
     EditCase(
         case_id='edit_red_soft_throw',
         source_case_id=SOURCE_CASE_ID,
         seed=9105,
-        dsl='SET red_stone.initial_velocity FROM 0.9 TO 0.4',
+        dsl='SET red_stone.initial_velocity FROM 1.5 TO 0.7',
         edit_summary=(
             'Red stone launched at less than half the yellow stone speed. '
-            'Yellow now carries the momentum: after the collision both stones '
-            "end up on the red side of centre (red -1.14, yellow -0.84) -- "
-            'the DSL-opposite of edit_red_hard_throw and a distinct visual '
-            '(the yellow stone is what crosses centre).'
+            'Yellow now carries the momentum: contact is delayed to frame 53 '
+            'and both stones end up on the red side of centre (red -1.43, '
+            'yellow -0.93) -- the DSL-opposite of edit_red_hard_throw and a '
+            'distinct visual (the yellow stone is what crosses centre).'
         ),
     ),
     EditCase(
         case_id='edit_yellow_at_rest',
         source_case_id=SOURCE_CASE_ID,
         seed=9106,
-        dsl='SET yellow_stone.initial_velocity FROM 0.9 TO 0.0',
+        dsl='SET yellow_stone.initial_velocity FROM 1.5 TO 0.0',
         edit_summary=(
             'Yellow stone starts at rest instead of sliding in. Red stone '
-            'launched at the same 0.9 m/s from 5 m away rolls in alone -- but '
+            'launched at the same 1.5 m/s from 5 m away rolls in alone -- but '
             'ice friction bleeds it off before it reaches yellow, so it stops '
-            'at +0.89 m with a 1.32 m gap still between them. No collision '
-            'happens; yellow never moves.'
+            'at +1.84 m with 0.66 m still between them. No collision happens; '
+            'yellow never moves.'
         ),
     ),
     # --- pair-shared elasticity ----------------------------------------
@@ -144,7 +145,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         edit_summary=(
             'Pair restitution raised from perfectly inelastic to near-elastic. '
             'The symmetric collision now rebounds cleanly: stones bounce apart '
-            'and end the clip at +/-0.57 m (baseline +/-0.25) still drifting '
+            'and end the clip at +/-0.95 m (baseline +/-0.32) still drifting '
             'away from centre.'
         ),
     ),

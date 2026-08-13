@@ -176,9 +176,12 @@ def jittered_color(
     color: tuple[float, float, float, float],
     amount: float,
 ) -> tuple[float, float, float, float]:
-    """Kept for call-site parity; the scene is deterministic so nothing moves."""
-    del rng, amount
-    return color
+    return (
+        clamp(color[0] + rng.uniform(-amount, amount), 0.0, 1.0),
+        clamp(color[1] + rng.uniform(-amount, amount), 0.0, 1.0),
+        clamp(color[2] + rng.uniform(-amount, amount), 0.0, 1.0),
+        color[3],
+    )
 
 
 def create_side_impact_motion(
@@ -187,13 +190,13 @@ def create_side_impact_motion(
 ) -> MotionSetup:
     return MotionSetup(
         ball_initial_location=(
-            SIDE_IMPACT_BALL_INITIAL_XY[0],
-            SIDE_IMPACT_BALL_INITIAL_XY[1],
+            SIDE_IMPACT_BALL_INITIAL_XY[0] + rng.uniform(-0.08, 0.10) * jitter,
+            SIDE_IMPACT_BALL_INITIAL_XY[1] + rng.uniform(-0.10, 0.10) * jitter,
             BALL_RADIUS + 0.001,
         ),
         ball_initial_velocity=(
-            6.0,
-            0.0,
+            6.0 + rng.uniform(-0.45, 0.55) * jitter,
+            rng.uniform(-0.24, 0.24) * jitter,
             0.0,
         ),
     )
@@ -207,20 +210,24 @@ def create_drop_onto_block_motion(
 ) -> MotionSetup:
     block_top_z = block_location[2] + WOOD_BLOCK_DIMENSIONS[2] * 0.5
     drop_x_velocity = (
-        0.18 if args.drop_x_velocity is None else float(args.drop_x_velocity)
+        0.18 + rng.uniform(-0.04, 0.06) * jitter
+        if args.drop_x_velocity is None
+        else float(args.drop_x_velocity) + rng.uniform(-0.03, 0.03) * jitter
     )
     drop_y_velocity = (
-        0.0 if args.drop_y_velocity is None else float(args.drop_y_velocity)
+        rng.uniform(-0.04, 0.04) * jitter
+        if args.drop_y_velocity is None
+        else float(args.drop_y_velocity) + rng.uniform(-0.02, 0.02) * jitter
     )
     ball_initial_location = (
-        block_location[0] - 0.16,
-        block_location[1],
-        block_top_z + BALL_RADIUS + 1.32,
+        block_location[0] - 0.16 + rng.uniform(-0.04, 0.05) * jitter,
+        block_location[1] + rng.uniform(-0.05, 0.05) * jitter,
+        block_top_z + BALL_RADIUS + 1.32 + rng.uniform(-0.10, 0.10) * jitter,
     )
     ball_initial_velocity = (
         drop_x_velocity,
         drop_y_velocity,
-        -0.18,
+        -0.18 + rng.uniform(-0.04, 0.02) * jitter,
     )
     return MotionSetup(
         ball_initial_location=ball_initial_location,
@@ -228,29 +235,24 @@ def create_drop_onto_block_motion(
     )
 
 
-# Camera constants. Every other scene in the benchmark fixes its camera this way;
-# this one used to draw position, aim and focal length from `rng`, and since each
-# PCVE case renders with its own --seed (5101, 5102, ... against the source's
-# 5001) the viewpoint and lens moved between an edited case and its own source.
-# A pixel-space comparison then measures the viewpoint change, not the edit.
-SIDE_IMPACT_CAMERA_LENS_MM = 46.0
-SIDE_IMPACT_CAMERA_FSTOP = 6.2
-DROP_CAMERA_OFFSET = (0.0, -0.22, 0.42)
-DROP_CAMERA_TARGET = (WOOD_BLOCK_LOCATION[0] - 0.05, WOOD_BLOCK_LOCATION[1], 0.88)
-DROP_CAMERA_LENS_MM = 41.0
-DROP_CAMERA_FSTOP = 7.0
-
 def create_side_impact_camera(rng: random.Random) -> dict[str, object]:
-    del rng  # the camera is fixed; kept in the signature for call-site parity
-    base_location = list(CAMERA_LOCATION)
-    target = list(CAMERA_TARGET)
+    base_location = [
+        CAMERA_LOCATION[0] + rng.uniform(-0.18, 0.16),
+        CAMERA_LOCATION[1] + rng.uniform(-0.18, 0.20),
+        CAMERA_LOCATION[2] + rng.uniform(-0.08, 0.10),
+    ]
+    target = [
+        CAMERA_TARGET[0] + rng.uniform(-0.08, 0.08),
+        CAMERA_TARGET[1] + rng.uniform(-0.06, 0.07),
+        CAMERA_TARGET[2] + rng.uniform(-0.02, 0.05),
+    ]
     return {
         "base_location": base_location,
         "target": target,
-        "lens_mm": SIDE_IMPACT_CAMERA_LENS_MM,
+        "lens_mm": 46.0 + rng.uniform(-3.0, 3.0),
         "sensor_width_mm": 32.0,
-        "focus_distance": math.dist(base_location, target),
-        "aperture_fstop": SIDE_IMPACT_CAMERA_FSTOP,
+        "focus_distance": math.dist(base_location, target) + rng.uniform(-0.08, 0.08),
+        "aperture_fstop": 6.2 + rng.uniform(-0.6, 0.8),
     }
 
 
@@ -258,23 +260,23 @@ def create_drop_onto_block_camera(
     rng: random.Random,
     block_location: tuple[float, float, float],
 ) -> dict[str, object]:
-    # block_location is itself jittered per case, so the aim point comes from the
-    # nominal block position instead -- that keeps the camera identical across
-    # cases even when the block is not pinned through scenario overrides.
-    del block_location, rng  # camera is fixed
     base_location = [
-        CAMERA_LOCATION[0] + DROP_CAMERA_OFFSET[0],
-        CAMERA_LOCATION[1] + DROP_CAMERA_OFFSET[1],
-        CAMERA_LOCATION[2] + DROP_CAMERA_OFFSET[2],
+        CAMERA_LOCATION[0] + rng.uniform(-0.12, 0.14),
+        CAMERA_LOCATION[1] - 0.22 + rng.uniform(-0.14, 0.14),
+        CAMERA_LOCATION[2] + 0.42 + rng.uniform(-0.06, 0.08),
     ]
-    target = list(DROP_CAMERA_TARGET)
+    target = [
+        block_location[0] - 0.05 + rng.uniform(-0.04, 0.04),
+        block_location[1] + rng.uniform(-0.04, 0.04),
+        0.88 + rng.uniform(-0.03, 0.04),
+    ]
     return {
         "base_location": base_location,
         "target": target,
-        "lens_mm": DROP_CAMERA_LENS_MM,
+        "lens_mm": 41.0 + rng.uniform(-1.5, 1.8),
         "sensor_width_mm": 32.0,
-        "focus_distance": math.dist(base_location, target),
-        "aperture_fstop": DROP_CAMERA_FSTOP,
+        "focus_distance": math.dist(base_location, target) + rng.uniform(-0.05, 0.05),
+        "aperture_fstop": 7.0 + rng.uniform(-0.4, 0.6),
     }
 
 
@@ -285,8 +287,8 @@ def create_scenario(args: argparse.Namespace) -> dict[str, object]:
     motion = str(args.motion)
 
     block_location = (
-        WOOD_BLOCK_LOCATION[0],
-        WOOD_BLOCK_LOCATION[1],
+        WOOD_BLOCK_LOCATION[0] + rng.uniform(-0.08, 0.10) * jitter,
+        WOOD_BLOCK_LOCATION[1] + rng.uniform(-0.07, 0.08) * jitter,
         WOOD_BLOCK_LOCATION[2],
     )
     if motion == "side_impact":
@@ -298,20 +300,17 @@ def create_scenario(args: argparse.Namespace) -> dict[str, object]:
     else:
         raise ValueError(f"Unsupported motion: {motion}")
 
-    # Eight scuffs spread over the ball on a fixed golden-angle spiral, so the
-    # marks look scattered but land in the same place on every render.
     extra_scuffs = []
-    golden_angle = math.pi * (3.0 - math.sqrt(5.0))
-    for i in range(8):
-        z = -0.25 + (0.92 - (-0.25)) * (i / 7.0)
-        theta = golden_angle * i
+    for _ in range(8):
+        z = rng.uniform(-0.25, 0.92)
+        theta = rng.uniform(0.0, 2.0 * math.pi)
         r = math.sqrt(max(0.0, 1.0 - z * z))
         extra_scuffs.append(
             {
                 "normal": [r * math.cos(theta), r * math.sin(theta), z],
-                "width": 0.022,
-                "height": 0.008,
-                "rotation": theta,
+                "width": rng.uniform(0.010, 0.034),
+                "height": rng.uniform(0.004, 0.012),
+                "rotation": rng.uniform(-math.pi, math.pi),
             }
         )
 
@@ -330,14 +329,14 @@ def create_scenario(args: argparse.Namespace) -> dict[str, object]:
             "ball_initial_location": list(motion_settings.ball_initial_location),
             "ball_initial_velocity": list(motion_settings.ball_initial_velocity),
             "block_location": list(block_location),
-            "block_yaw_deg": 0.0,
-            "ball_mass": 0.58,
-            "block_mass": 0.65,
-            "floor_friction": 0.82,
-            "ball_friction": 0.38,
-            "ball_restitution": 0.78,
-            "block_friction": 0.32,
-            "block_restitution": 0.55,
+            "block_yaw_deg": rng.uniform(-3.5, 3.5) * jitter,
+            "ball_mass": 0.58 + rng.uniform(-0.05, 0.05) * jitter,
+            "block_mass": 0.65 + rng.uniform(-0.08, 0.09) * jitter,
+            "floor_friction": 0.82 + rng.uniform(-0.08, 0.05) * jitter,
+            "ball_friction": 0.38 + rng.uniform(-0.06, 0.06) * jitter,
+            "ball_restitution": 0.78 + rng.uniform(-0.06, 0.04) * jitter,
+            "block_friction": 0.32 + rng.uniform(-0.05, 0.07) * jitter,
+            "block_restitution": 0.55 + rng.uniform(-0.06, 0.05) * jitter,
             # Not jittered: these are the PCVE edit surface, and a jittered
             # baseline would make an edit's "from" value a lie. They match the
             # values that were previously hard-coded in the simulator.
@@ -349,28 +348,26 @@ def create_scenario(args: argparse.Namespace) -> dict[str, object]:
             "block_active": [1],
         },
         "render": {
-            # Perturbations around neutral collapse to 0; parameters that were
-            # drawn from a range with no base value take that range's midpoint.
-            "exposure": 0.0,
+            "exposure": rng.uniform(-0.08, 0.05),
             "gamma": 1.0,
-            "motion_blur_shutter": 0.30,
-            "postprocess_noise_strength": 3,
-            "postprocess_contrast": 1.012,
-            "postprocess_saturation": 1.012,
-            "postprocess_gamma": 0.998,
-            "lens_correction_k1": -0.014,
-            "lens_correction_k2": 0.0055,
+            "motion_blur_shutter": 0.30 + rng.uniform(-0.035, 0.035),
+            "postprocess_noise_strength": rng.randint(2, 3),
+            "postprocess_contrast": 1.012 + rng.uniform(0.0, 0.012),
+            "postprocess_saturation": 1.012 + rng.uniform(0.0, 0.018),
+            "postprocess_gamma": 0.998 + rng.uniform(-0.004, 0.006),
+            "lens_correction_k1": rng.uniform(-0.018, -0.010),
+            "lens_correction_k2": rng.uniform(0.003, 0.008),
             "chromatic_shift_px": 0,
-            "vignette_angle": 0.37,
+            "vignette_angle": rng.uniform(0.34, 0.40),
         },
         "camera": camera_settings,
         "lighting": {
-            "hdri_rotation_deg": 128.0,
-            "hdri_strength": 0.30,
-            "key_power": 285.0,
-            "key_size": 5.1,
-            "bounce_power": 34.0,
-            "wall_fill_power": 12.0,
+            "hdri_rotation_deg": 128.0 + rng.uniform(-18.0, 20.0),
+            "hdri_strength": 0.30 + rng.uniform(-0.04, 0.05),
+            "key_power": 285.0 + rng.uniform(-35.0, 45.0),
+            "key_size": 5.1 + rng.uniform(-0.45, 0.45),
+            "bounce_power": 34.0 + rng.uniform(-7.0, 8.0),
+            "wall_fill_power": 12.0 + rng.uniform(-3.5, 4.0),
             "key_color": list(jittered_color(rng, (0.95, 0.98, 1.0, 1.0), 0.018)),
             "bounce_color": list(jittered_color(rng, (1.0, 0.78, 0.55, 1.0), 0.025)),
             "fill_color": list(jittered_color(rng, (0.82, 0.86, 0.90, 1.0), 0.020)),
@@ -379,9 +376,9 @@ def create_scenario(args: argparse.Namespace) -> dict[str, object]:
             "floor_texture_asset": "wood_floor_worn",
             "block_texture_asset": str(args.block_texture_asset),
             "ball_texture_asset": "Rubber002",
-            "floor_texture_scale": 48.0,
-            "block_texture_scale": 0.95,
-            "ball_texture_scale": 3.8,
+            "floor_texture_scale": 48.0 + rng.uniform(-3.0, 3.0),
+            "block_texture_scale": 0.95 + rng.uniform(-0.08, 0.08),
+            "ball_texture_scale": 3.8 + rng.uniform(-0.30, 0.35),
             "floor_tint": list(jittered_color(rng, (0.52, 0.34, 0.20, 1.0), 0.035)),
             "block_tint": list(jittered_color(rng, (0.64, 0.42, 0.24, 1.0), 0.045)),
             "wall_color": list(jittered_color(rng, (0.70, 0.66, 0.60, 1.0), 0.035)),
@@ -1153,18 +1150,15 @@ def add_floor_details(scenario: dict[str, object]) -> None:
 
 
 def add_background_clutter(scenario: dict[str, object]) -> None:
-    # Fixed placement: this ran off `seed`, so the rail angle and the furniture
-    # legs shifted between a case and its own source even though both are meant
-    # to differ only by the edited property.
-    del scenario
+    rng = random.Random(int(scenario["seed"]) + 202)
     dark_wood = create_principled_material("distant dark furniture wood", (0.22, 0.13, 0.07, 1.0), 0.58, noise_bump=0.01)
     shadow_plastic = create_principled_material("matte dark plastic foot", (0.035, 0.033, 0.030, 1.0), 0.72)
 
-    add_box("low background wooden rail", (2.62, 2.64, 0.78), (1.85, 0.18, 0.16), dark_wood, rotation_z=0.0, bevel_width=0.012)
+    add_box("low background wooden rail", (2.62, 2.64, 0.78), (1.85, 0.18, 0.16), dark_wood, rotation_z=rng.uniform(-0.04, 0.04), bevel_width=0.012)
     for idx, x in enumerate((1.82, 3.36)):
         add_cylinder(
             f"out of focus furniture leg {idx:02d}",
-            (x, 2.35, 0.50),
+            (x, 2.35 + rng.uniform(-0.05, 0.04), 0.50),
             0.055,
             1.0,
             shadow_plastic,

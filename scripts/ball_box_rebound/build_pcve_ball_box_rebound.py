@@ -180,7 +180,7 @@ def parse_args() -> argparse.Namespace:
     # compared frame against frame, so a per-case duration -- which the older
     # scenario suite used -- would put a difference in the pair that no edit
     # asked for. 3.0 s is long enough for the source to settle (frame 45).
-    parser.add_argument("--duration-sec", type=float, default=3.0)
+    parser.add_argument("--duration-sec", type=float, default=4.0)
     parser.add_argument("--samples", type=int, default=64)
     parser.add_argument("--device", choices=("auto", "cpu"), default="auto")
     parser.add_argument("--skip-existing", action="store_true")

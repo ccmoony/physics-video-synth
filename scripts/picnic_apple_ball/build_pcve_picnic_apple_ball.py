@@ -82,12 +82,12 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_slick_soccer_ball",
         source_case_id=SOURCE_CASE_ID,
         seed=8102,
-        dsl="SET soccer_ball.friction FROM 0.25 TO 0.05",
+        dsl="SET soccer_ball.friction FROM 0.25 TO 0.10",
         edit_summary=(
-            "Soccer ball's friction cut 5x. Both the lateral coefficient and "
-            "the rolling one scale together, so after the same impact the "
-            "ball meets almost no grip on the grass and rolls 2.29 m -- more "
-            "than 4x the baseline distance -- before finally slowing to a stop."
+            "Soccer ball's friction cut 2.5x. Both the lateral coefficient and "
+            "the rolling one scale together, so after the same apple impact "
+            "the ball meets much less grip on the grass and rolls 1.25 m -- "
+            "more than 2x the 0.54 m baseline -- before settling within the shot."
         ),
     ),
     EditCase(
@@ -107,11 +107,11 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_heavy_apple",
         source_case_id=SOURCE_CASE_ID,
         seed=8104,
-        dsl="SET apple.mass FROM 0.15 TO 0.5",
+        dsl="SET apple.mass FROM 0.15 TO 0.35",
         edit_summary=(
-            "Apple made 3.3x heavier. The off-center hit now carries much "
-            "more momentum into the ball: it rolls 3.31 m -- roughly 6x the "
-            "baseline -- and is still moving at the end of the shot."
+            "Apple made 2.3x heavier. The off-centre hit now carries more "
+            "momentum into the ball: it rolls 1.85 m -- about 3.4x the 0.54 m "
+            "baseline -- and comes to rest before the end of the shot."
         ),
     ),
     EditCase(
@@ -154,7 +154,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--blender", type=Path, default=DEFAULT_BLENDER)
     parser.add_argument("--resolution", nargs=2, type=int, default=(1280, 720))
     parser.add_argument("--fps", type=int, default=24)
-    parser.add_argument("--duration-sec", type=float, default=4.5)
+    parser.add_argument("--duration-sec", type=float, default=4.0)
     parser.add_argument("--samples", type=int, default=64)
     parser.add_argument("--device", choices=("auto", "cpu"), default="auto")
     parser.add_argument("--skip-existing", action="store_true")

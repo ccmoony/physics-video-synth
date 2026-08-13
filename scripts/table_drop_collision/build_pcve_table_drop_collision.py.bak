@@ -1,23 +1,27 @@
-"""Build the toy_car_ball PCVE suite.
+"""Build the table_drop_collision PCVE suite.
 
 Each edit is declared as a single ``edit_dsl`` string. Prompts (precise +
 vague, zh + en), scenario overrides, and the physics diff for the manifest
 are all derived from that one string.
 
-The scene: a small toy car is pushed along a wooden shelf at 0.6 m/s and
-rear-ends a soft toy ball sitting near the far edge. At baseline the ball
-is knocked off the shelf, falls to the floor, and comes to rest at
-x=-1.08 m. The car keeps going and also topples off the edge behind it.
-
-Every value below was picked by sweeping simulate_toy_car_ball.py directly;
-the numbers in each edit_summary are that sweep's output at the suite's
-defaults.
+The scene: a "new" tennis ball rolls off a coffee table, arcs to the floor,
+and strikes an "old" tennis ball waiting on the rug in line with the lane.
+At baseline the rolling ball leaves the lip at 1.05 m/s, lands 0.67 m out,
+and the head-on hit sends the target 0.30 m west while the rolling ball is
+kicked back 0.74 m east. Every value below was picked by sweeping
+simulate_table_drop_collision.py directly; the numbers in each edit_summary
+are that sweep's output at the suite's defaults.
 
 Notes on the edit surface:
-- Only the ball can be DELETEd. The car drives the whole simulation, so
-  a DELETE on it is not exposed.
-- The car is the only object with a non-zero baseline velocity, so
+- Only the target ball can be DELETEd. The rolling ball is the trigger
+  that drives the whole simulation (the sim is not built to run without
+  it), so a DELETE on it is not exposed.
+- The rolling ball is the only one with a non-zero baseline velocity, so
   `initial_velocity` is bound only on it (via launch_speed).
+- 3+ different push-speed cases were surveyed; the sim's high-substep
+  contact starts to miss above 1.5 m/s (fast rolling ball passes over the
+  target), so the "hard break" analogue is not in the suite -- only the
+  soft-push (miss) direction is.
 """
 
 from __future__ import annotations
@@ -40,7 +44,7 @@ import edit_vocab             # noqa: E402
 
 WORKSPACE_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_BLENDER = WORKSPACE_DIR / "tools" / "blender-3.6.23-linux-x64" / "blender"
-RENDER_SCRIPT = WORKSPACE_DIR / "scripts" / "toy_car_ball" / "render_toy_car_ball.py"
+RENDER_SCRIPT = WORKSPACE_DIR / "scripts" / "table_drop_collision" / "render_table_drop_collision.py"
 
 
 VOCAB = edit_vocab.VOCAB
@@ -57,73 +61,91 @@ class EditCase:
     seed: int
     dsl: str
     edit_summary: str
+    # Some edits leave the rolling ball still running across the floor at
+    # the end of the shot; those override the suite's default duration.
+    duration_sec: float | None = None
 
 
-SOURCE_CASE_ID = "toy_car_ball_baseline"
+SOURCE_CASE_ID = "table_drop_collision_baseline"
 
 
 EDIT_CASES: tuple[EditCase, ...] = (
     EditCase(
+        case_id="edit_heavy_rolling_ball",
+        source_case_id=SOURCE_CASE_ID,
+        seed=11101,
+        dsl="SET rolling_ball.mass FROM 0.057 TO 0.285",
+        edit_summary=(
+            "Rolling ball made 5x heavier. The impact now carries much more "
+            "momentum into the target: it rockets 1.64 m across the floor "
+            "(5x the baseline's 0.30 m), and the rolling ball keeps driving "
+            "on behind it, ending 0.98 m past the lip instead of 0.74 m."
+        ),
+    ),
+    EditCase(
+        case_id="edit_light_rolling_ball",
+        source_case_id=SOURCE_CASE_ID,
+        seed=11102,
+        dsl="SET rolling_ball.mass FROM 0.057 TO 0.014",
+        edit_summary=(
+            "Rolling ball made 4x lighter (57 g -> 14 g). It still lands on "
+            "top of the target, but bounces mostly straight up off it: the "
+            "target barely moves (0.03 m vs 0.30 m at baseline) and the "
+            "rolling ball comes to rest 0.19 m past the lip instead of 0.74 m."
+        ),
+    ),
+    EditCase(
+        case_id="edit_heavy_target_ball",
+        source_case_id=SOURCE_CASE_ID,
+        seed=11103,
+        dsl="SET target_ball.mass FROM 0.057 TO 0.285",
+        edit_summary=(
+            "Target ball made 5x heavier. The rolling ball hits a wall of "
+            "mass and rebounds backward -- ending up EAST of the lip "
+            "instead of west of it -- and the target only creeps 0.02 m "
+            "instead of the baseline's 0.30 m."
+        ),
+    ),
+    EditCase(
         case_id="edit_soft_push",
         source_case_id=SOURCE_CASE_ID,
-        seed=15101,
-        dsl="SET toy_car.initial_velocity FROM 0.6 TO 0.35",
+        seed=11104,
+        dsl="SET rolling_ball.initial_velocity FROM 1.28 TO 0.8",
+        duration_sec=3.4,
         edit_summary=(
-            "Car pushed more gently (0.6 -> 0.35 m/s). Table friction "
-            "bleeds off the push before the car ever reaches the ball: "
-            "the car coasts to a stop still on the table and the ball sits "
-            "untouched near the edge for the whole shot -- no collision, "
-            "no fall."
+            "Rolling ball pushed more gently across the table (1.28 -> 0.8 "
+            "m/s). It reaches the lip at lower speed, is thrown 65 mm less "
+            "far off the edge, and lands short of the target -- no contact "
+            "at all. The target stays untouched at its starting position; "
+            "the rolling ball rolls out west across the floor alone."
         ),
     ),
     EditCase(
-        case_id="edit_hard_push",
+        case_id="edit_dead_rolling_ball",
         source_case_id=SOURCE_CASE_ID,
-        seed=15102,
-        dsl="SET toy_car.initial_velocity FROM 0.6 TO 0.9",
+        seed=11105,
+        dsl="SET rolling_ball.restitution FROM 0.86 TO 0.1",
+        duration_sec=3.4,
         edit_summary=(
-            "Car pushed 50% harder (0.6 -> 0.9 m/s). The heavier hit sends "
-            "the ball flying off the edge much further: it lands and rolls "
-            "out to x=-2.42 m, more than twice the baseline's 1.08 m. The "
-            "car itself also flies off behind it."
+            "Rolling ball's restitution killed (0.86 -> 0.1). Its floor "
+            "bounce and its impact against the target both go inelastic: "
+            "instead of transferring cleanly, the pair sticks and the "
+            "rolling ball drives on behind the target. Target moves only "
+            "0.12 m (vs 0.30 m at baseline); the rolling ball ends 0.97 m "
+            "past the lip instead of 0.74 m."
         ),
     ),
     EditCase(
-        case_id="edit_heavy_car",
+        case_id="edit_remove_target_ball",
         source_case_id=SOURCE_CASE_ID,
-        seed=15103,
-        dsl="SET toy_car.mass FROM 0.35 TO 1.2",
+        seed=11106,
+        dsl="DELETE target_ball",
+        duration_sec=3.4,
         edit_summary=(
-            "Car made 3.4x heavier (0.35 -> 1.2 kg). Same launch speed, "
-            "but much more momentum: the collision drives the ball out to "
-            "x=-2.33 m -- roughly 2.2x the baseline distance -- and the "
-            "car plows on and off the edge itself. Similar visual outcome "
-            "to the hard-push edit, achieved through a different knob."
-        ),
-    ),
-    EditCase(
-        case_id="edit_bouncy_ball",
-        source_case_id=SOURCE_CASE_ID,
-        seed=15104,
-        dsl="SET toy_ball.restitution FROM 0.6 TO 0.99",
-        edit_summary=(
-            "Ball's restitution pushed to 0.99 (near-perfect elastic "
-            "bounce). It is still knocked off the shelf, but instead of "
-            "settling on the floor at (x=-1.08, z=0.06) it keeps bouncing "
-            "throughout the shot -- final position (x=-0.99, z=0.84) with "
-            "the ball still airborne at end of clip."
-        ),
-    ),
-    EditCase(
-        case_id="edit_remove_toy_ball",
-        source_case_id=SOURCE_CASE_ID,
-        seed=15105,
-        dsl="DELETE toy_ball",
-        edit_summary=(
-            "Ball removed. The car drives across an empty shelf and reaches "
-            "the far edge without hitting anything; no fall, no collision. "
-            "The car itself comes to rest near the edge instead of being "
-            "knocked off behind the ball as in the baseline."
+            "Target ball removed. The rolling ball leaves the table and "
+            "lands on the rug exactly where the baseline predicts -- "
+            "(-0.67, -0.29) -- and, with nothing to strike, rolls on "
+            "unobstructed for 1.18 m before friction stops it."
         ),
     ),
 )
@@ -134,18 +156,20 @@ EDIT_CASES: tuple[EditCase, ...] = (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Build the toy_car_ball PCVE suite (1 source + N edits)."
+        description="Build the table_drop_collision PCVE suite (1 source + N edits)."
     )
     parser.add_argument(
         "--out-root",
         type=Path,
-        default=WORKSPACE_DIR / "renders" / "pcve_toy_car_ball_suite",
+        default=WORKSPACE_DIR / "renders" / "pcve_table_drop_collision_suite",
     )
     parser.add_argument("--blender", type=Path, default=DEFAULT_BLENDER)
     parser.add_argument("--resolution", nargs=2, type=int, default=(1280, 720))
     parser.add_argument("--fps", type=int, default=24)
-    parser.add_argument("--duration-sec", type=float, default=4.0)
-    parser.add_argument("--samples", type=int, default=32)
+    parser.add_argument("--duration-sec", type=float, default=4.0,
+                        help="Default clip length; edits that leave the ball "
+                             "still running override this per-case.")
+    parser.add_argument("--samples", type=int, default=64)
     parser.add_argument("--device", choices=("auto", "cpu"), default="auto")
     parser.add_argument("--skip-existing", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -172,6 +196,7 @@ def render_command(
     *,
     case_dir: Path,
     overrides_path: Path | None,
+    duration_sec: float,
 ) -> list[str]:
     cmd = [
         str(args.blender.expanduser().resolve()),
@@ -183,7 +208,7 @@ def render_command(
         "--out-dir", str(case_dir.resolve()),
         "--resolution", str(int(args.resolution[0])), str(int(args.resolution[1])),
         "--fps", str(int(args.fps)),
-        "--duration-sec", str(float(args.duration_sec)),
+        "--duration-sec", str(float(duration_sec)),
         "--samples", str(int(args.samples)),
         "--device", str(args.device),
         "--seed", str(int(seed)),
@@ -194,7 +219,7 @@ def render_command(
 
 
 def standardize_render_outputs(case_dir: Path, *, has_overrides: bool) -> dict[str, str]:
-    video_source = case_dir / "toy_car_ball.mp4"
+    video_source = case_dir / "table_drop_collision.mp4"
     if not video_source.exists():
         candidates = sorted(case_dir.glob("*.mp4"))
         if not candidates:
@@ -223,9 +248,10 @@ def render_case(
     case_dir: Path,
     seed: int,
     overrides_path: Path | None,
+    duration_sec: float,
 ) -> None:
     case_dir.mkdir(parents=True, exist_ok=True)
-    cmd = render_command(args, seed, case_dir=case_dir, overrides_path=overrides_path)
+    cmd = render_command(args, seed, case_dir=case_dir, overrides_path=overrides_path, duration_sec=duration_sec)
     if args.dry_run:
         print(" ".join(cmd))
         return
@@ -295,13 +321,14 @@ def main() -> None:
     manifest_path = args.out_root / "suite_manifest.json"
     manifest: dict[str, Any] = {
         "schema_version": 3,
-        "suite_name": "pcve_toy_car_ball_suite",
+        "suite_name": "pcve_table_drop_collision_suite",
         "description": (
-            "One source toy-car-hits-toy-ball video plus N edited variants. "
-            "A toy car is pushed along a shelf and rear-ends a toy ball off "
-            "the edge. Each edit is declared with a single edit-DSL string; "
-            "prompts (precise + vague, zh + en), scenario overrides, and "
-            "the physics diff are all derived from that one string."
+            "One source table-drop head-on-collision video plus N edited "
+            "variants. A tennis ball rolls off a coffee table onto a second "
+            "tennis ball on the floor. Each edit is declared with a single "
+            "edit-DSL string; prompts (precise + vague, zh + en), scenario "
+            "overrides, and the physics diff are all derived from that one "
+            "string."
         ),
         "baseline_physics": BASELINE_PHYSICS,
         "resolution": [int(args.resolution[0]), int(args.resolution[1])],
@@ -319,11 +346,11 @@ def main() -> None:
         "case_id": SOURCE_CASE_ID,
         "kind": "source",
         "description": (
-            "Source video: default parameters. A toy car (0.35 kg) is "
-            "pushed at 0.6 m/s along a shelf and rear-ends a toy ball "
-            "(0.05 kg) sitting near the far edge. The ball is knocked off "
-            "and lands on the floor at x=-1.08 m; the car follows and "
-            "also topples off the edge."
+            "Source video: default parameters. A new (bright yellow) tennis "
+            "ball is pushed at 1.28 m/s along the table, leaves the west lip "
+            "at 1.05 m/s, lands at (-0.67, -0.29) on the rug, and hits an "
+            "old (dulled) tennis ball waiting in line. The old ball is "
+            "driven 0.30 m west; the new ball is kicked 0.74 m east."
         ),
         "case_dir": str(source_dir.resolve()),
         "status": "pending",
@@ -336,12 +363,14 @@ def main() -> None:
         source_record["status"] = "skipped_existing"
         source_record["outputs"] = standardize_render_outputs(source_dir, has_overrides=False)
     elif args.dry_run:
-        render_case(args, case_dir=source_dir, seed=15001, overrides_path=None)
+        render_case(args, case_dir=source_dir, seed=11001, overrides_path=None,
+                    duration_sec=float(args.duration_sec))
         source_record["status"] = "dry_run"
     else:
         t0 = time.perf_counter()
         print(f"[suite] render source {SOURCE_CASE_ID}")
-        render_case(args, case_dir=source_dir, seed=15001, overrides_path=None)
+        render_case(args, case_dir=source_dir, seed=11001, overrides_path=None,
+                    duration_sec=float(args.duration_sec))
         source_record["outputs"] = standardize_render_outputs(source_dir, has_overrides=False)
         source_record["elapsed_sec"] = round(time.perf_counter() - t0, 3)
         source_record["status"] = "completed"
@@ -358,11 +387,14 @@ def main() -> None:
         write_json(overrides_path, overrides_payload)
         prompts_path = write_prompt_file(case_dir, case, edit_info)
 
+        duration_sec = case.duration_sec if case.duration_sec is not None else float(args.duration_sec)
+
         record: dict[str, Any] = {
             "case_id": case.case_id,
             "kind": "edit",
             "source_case_id": case.source_case_id,
             "seed": case.seed,
+            "duration_sec": duration_sec,
             "case_dir": str(case_dir.resolve()),
             "scenario_overrides_json": str(overrides_path.resolve()),
             "prompts_json": str(prompts_path.resolve()),
@@ -384,7 +416,8 @@ def main() -> None:
             continue
 
         if args.dry_run:
-            render_case(args, case_dir=case_dir, seed=case.seed, overrides_path=overrides_path)
+            render_case(args, case_dir=case_dir, seed=case.seed, overrides_path=overrides_path,
+                        duration_sec=duration_sec)
             record["status"] = "dry_run"
             write_json(manifest_path, manifest)
             continue
@@ -392,7 +425,8 @@ def main() -> None:
         t0 = time.perf_counter()
         print(f"[suite] render edit {case.case_id}")
         try:
-            render_case(args, case_dir=case_dir, seed=case.seed, overrides_path=overrides_path)
+            render_case(args, case_dir=case_dir, seed=case.seed, overrides_path=overrides_path,
+                        duration_sec=duration_sec)
         except subprocess.CalledProcessError:
             record["status"] = "failed"
             record["elapsed_sec"] = round(time.perf_counter() - t0, 3)

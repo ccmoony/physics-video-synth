@@ -4,12 +4,13 @@ Each edit is declared as a single ``edit_dsl`` string. Prompts (precise +
 vague, zh + en), scenario overrides, and the physics diff for the manifest
 are all derived from that one string.
 
-The scene: a tennis ball is launched from (-8, -3, 5) with horizontal
-velocity 9.973 m/s along +X and arcs under gravity onto a court. At
-baseline it lands at x=1.75, barely bounces, and rolls out to x=7.37
+The scene: a tennis ball is launched from (-4, 0, 1.5) with initial
+velocity (4.5, 0, 4.5) m/s. It arcs to about z=2.5 m over the net at
+x=0, first touches down at x≈1.05 (t≈1.17 s), and rolls out to x≈3.3
 before stopping. Every value below was picked by sweeping
-simulate_tennis_flight.py directly; the numbers in each edit_summary are
-that sweep's output at the suite's defaults.
+simulate_tennis_flight.py directly at the suite defaults
+(duration 4 s, gravity -9.8 m/s²); the numbers in each edit_summary
+are that sweep's output.
 
 Notes on the edit surface:
 - No DELETE binding: the scene has one moving object and removing it
@@ -72,9 +73,10 @@ EDIT_CASES: tuple[EditCase, ...] = (
         dsl="SET ball.friction FROM 0.5 TO 0.1",
         edit_summary=(
             "Ball's friction cut 5x -- both lateral and rolling coefficients "
-            "scale together. After landing, the ball meets almost no grip on "
-            "the court and rolls 30.5 m along +X before finally slowing to "
-            "a stop, more than 4x the baseline's 7.4 m roll-out."
+            "scale together. After the same landing at x=1.06 the ball meets "
+            "almost no grip on the court and is still rolling fast at the "
+            "end of the 4 s window, having reached x=8.8 m -- roughly 2.6x "
+            "the baseline's 3.3 m roll-out."
         ),
     ),
     EditCase(
@@ -83,10 +85,10 @@ EDIT_CASES: tuple[EditCase, ...] = (
         seed=13102,
         dsl="SET ball.friction FROM 0.5 TO 1.5",
         edit_summary=(
-            "Ball's friction tripled. After the same landing at x=1.7 the "
-            "high-friction contact eats the roll immediately: the ball stops "
-            "essentially at its landing point (final x=1.71 m vs 7.37 m "
-            "baseline), no run-out at all."
+            "Ball's friction tripled. After the same landing at x=1.05 the "
+            "high-friction contact eats the roll almost immediately: the "
+            "ball stops essentially at its landing point (final x=1.38 m "
+            "vs 3.31 m baseline), no meaningful run-out."
         ),
     ),
     EditCase(
@@ -96,35 +98,35 @@ EDIT_CASES: tuple[EditCase, ...] = (
         dsl="SET ball.restitution FROM 0.05 TO 0.9",
         edit_summary=(
             "Ball's restitution 18x higher -- from a dead thud (0.05) to a "
-            "near-perfect bounce (0.9). Instead of pancaking on landing the "
-            "ball skips down the court, first coming back to earth at "
-            "x=4.8 m instead of x=1.75 m, and takes multiple bounces before "
-            "settling."
+            "near-perfect bounce (0.9). The first landing at x=1.05 is the "
+            "same, but instead of pancaking the ball hops several times "
+            "along +X before settling (final x=3.48 m vs 3.31 m baseline), "
+            "with the visible bounces being the tell."
         ),
     ),
     EditCase(
         case_id="edit_soft_serve",
         source_case_id=SOURCE_CASE_ID,
         seed=13104,
-        dsl="SET ball.initial_velocity FROM 9.973 TO 5.0",
+        dsl="SET ball.initial_velocity FROM 4.5 TO 2.5",
         edit_summary=(
-            "Launch speed cut roughly in half (9.97 -> 5.0 m/s along +X). "
-            "The parabola is much shorter: the ball lands at x=-3.05 m "
-            "instead of x=1.75 m, and finishes the shot near x=-2.55 m --  "
-            "far short of the baseline's final position of x=7.37 m."
+            "Launch speed cut nearly in half (4.5 -> 2.5 m/s along +X). "
+            "The ball no longer clears the net: it lands short at x=-1.16 m "
+            "(net is at x=0) and rolls out to only x=-0.49 m, versus the "
+            "baseline landing at x=1.05 m and finishing at x=3.31 m."
         ),
     ),
     EditCase(
         case_id="edit_hard_serve",
         source_case_id=SOURCE_CASE_ID,
         seed=13105,
-        dsl="SET ball.initial_velocity FROM 9.973 TO 15.0",
+        dsl="SET ball.initial_velocity FROM 4.5 TO 6.5",
         edit_summary=(
-            "Launch speed 1.5x faster (9.97 -> 15.0 m/s). The ball flies "
-            "much further before touching down (landing at x=6.4 m instead "
-            "of x=1.75 m) and, still carrying energy after the landing, "
-            "rolls off past x=37 m by the end of the shot -- more than 5x "
-            "the baseline's final distance."
+            "Launch speed ~1.4x faster (4.5 -> 6.5 m/s). The ball flies "
+            "further before touching down (landing at x=3.23 m instead of "
+            "x=1.05 m) and, still carrying energy after landing, rolls out "
+            "to x=7.11 m by the end of the 4 s window -- more than 2x the "
+            "baseline's 3.31 m final position."
         ),
     ),
 )
@@ -145,7 +147,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--blender", type=Path, default=DEFAULT_BLENDER)
     parser.add_argument("--resolution", nargs=2, type=int, default=(1280, 720))
     parser.add_argument("--fps", type=int, default=24)
-    parser.add_argument("--duration-sec", type=float, default=6.0)
+    parser.add_argument("--duration-sec", type=float, default=4.0)
     parser.add_argument("--samples", type=int, default=32)
     parser.add_argument("--device", choices=("auto", "cpu"), default="auto")
     parser.add_argument("--skip-existing", action="store_true")
@@ -322,9 +324,10 @@ def main() -> None:
         "kind": "source",
         "description": (
             "Source video: default parameters. A tennis ball is launched "
-            "from (-8, -3, 5) with horizontal velocity 9.97 m/s along +X. "
-            "It arcs under gravity, lands at x=1.75, and rolls out to "
-            "x=7.37 before stopping."
+            "from (-4, 0, 1.5) with initial velocity (4.5, 0, 4.5) m/s. "
+            "It arcs to about z=2.5 m over the net at x=0, first touches "
+            "down at x=1.05 (t=1.17 s), and rolls out to x=3.31 by the "
+            "end of the 4 s window."
         ),
         "case_dir": str(source_dir.resolve()),
         "status": "pending",

@@ -29,10 +29,12 @@ GROUND_TRUTH_NAME = "ground_truth_transforms.json"
 PHYSICS_TEMP_NAME = "physics_transforms.json"
 SCENARIO_METADATA_NAME = "scenario_metadata.json"
 
-# Camera settings: side view with slight俯视 to capture the full parabolic trajectory
-CAMERA_LOCATION = (0.5, -10.0, 2.5)
-CAMERA_TARGET = (0.5, 0.0, 0.8)
-CAMERA_LENS_MM = 50.0
+# Tight side view centered on the net (x=0). Close enough that the ball
+# reads clearly on screen while still keeping launch (x=-4) and the
+# landing (x≈+1.2) inside the frame.
+CAMERA_LOCATION = (0.0, -10.0, 2.5)
+CAMERA_TARGET = (0.0, 0.0, 1.0)
+CAMERA_LENS_MM = 35.0
 
 
 def parse_args() -> argparse.Namespace:
@@ -46,7 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--resolution", nargs=2, type=int, default=(960, 540))
     parser.add_argument("--fps", type=int, default=24)
-    parser.add_argument("--duration-sec", type=float, default=6.0)
+    parser.add_argument("--duration-sec", type=float, default=3.0)
     parser.add_argument("--samples", type=int, default=96)
     parser.add_argument("--preview-frame", type=int, default=15)
     parser.add_argument("--device", choices=("auto", "cpu"), default="cpu")
@@ -271,8 +273,8 @@ def create_scenario(args: argparse.Namespace) -> dict[str, object]:
                 "ball_restitution": 0.05,
                 "ball_rolling_friction": 0.015,
                 "floor_friction": 0.6,
-                "launch_location": [-8.0, -3.0, 5.0],
-                "launch_velocity": [9.973, 0.0, 0.0],
+                "launch_location": [-4.0, 0.0, 1.5],
+                "launch_velocity": [4.5, 0.0, 4.5],
                 "gravity": [0.0, 0.0, -9.8],
             },
             "jitter": {

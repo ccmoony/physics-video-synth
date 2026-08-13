@@ -61,8 +61,8 @@ class EditCase:
     seed: int
     dsl: str
     edit_summary: str
-    # Some edits leave the rolling ball still running across the floor at
-    # the end of the shot; those override the suite's default duration.
+    # Optional per-case override of the suite's default duration; unused now
+    # (was 3.4s for a few edits where the ball keeps rolling past the shot).
     duration_sec: float | None = None
 
 
@@ -111,7 +111,6 @@ EDIT_CASES: tuple[EditCase, ...] = (
         source_case_id=SOURCE_CASE_ID,
         seed=11104,
         dsl="SET rolling_ball.initial_velocity FROM 1.28 TO 0.8",
-        duration_sec=3.4,
         edit_summary=(
             "Rolling ball pushed more gently across the table (1.28 -> 0.8 "
             "m/s). It reaches the lip at lower speed, is thrown 65 mm less "
@@ -125,7 +124,6 @@ EDIT_CASES: tuple[EditCase, ...] = (
         source_case_id=SOURCE_CASE_ID,
         seed=11105,
         dsl="SET rolling_ball.restitution FROM 0.86 TO 0.1",
-        duration_sec=3.4,
         edit_summary=(
             "Rolling ball's restitution killed (0.86 -> 0.1). Its floor "
             "bounce and its impact against the target both go inelastic: "
@@ -140,7 +138,6 @@ EDIT_CASES: tuple[EditCase, ...] = (
         source_case_id=SOURCE_CASE_ID,
         seed=11106,
         dsl="DELETE target_ball",
-        duration_sec=3.4,
         edit_summary=(
             "Target ball removed. The rolling ball leaves the table and "
             "lands on the rug exactly where the baseline predicts -- "
@@ -166,7 +163,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--blender", type=Path, default=DEFAULT_BLENDER)
     parser.add_argument("--resolution", nargs=2, type=int, default=(1280, 720))
     parser.add_argument("--fps", type=int, default=24)
-    parser.add_argument("--duration-sec", type=float, default=2.8,
+    parser.add_argument("--duration-sec", type=float, default=4.0,
                         help="Default clip length; edits that leave the ball "
                              "still running override this per-case.")
     parser.add_argument("--samples", type=int, default=64)

@@ -182,7 +182,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--blender", type=Path, default=DEFAULT_BLENDER)
     parser.add_argument("--resolution", nargs=2, type=int, default=(1280, 720))
     parser.add_argument("--fps", type=int, default=24)
-    parser.add_argument("--duration-sec", type=float, default=3.0)
+    parser.add_argument("--duration-sec", type=float, default=4.0)
     # 64, not the 32 most scenes use: this one is lit by a single practical
     # pendant in a dark room, and at 32 the shadowed side of the cabinet and
     # the tiled floor still carry visible denoiser blotching.

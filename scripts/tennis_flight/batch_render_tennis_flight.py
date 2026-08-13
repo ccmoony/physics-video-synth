@@ -24,7 +24,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mode", choices=("preview", "animation", "frames"), default="preview")
     parser.add_argument("--resolution", nargs=2, type=int, default=(960, 540))
     parser.add_argument("--fps", type=int, default=24)
-    parser.add_argument("--duration-sec", type=float, default=6.0)
+    parser.add_argument("--duration-sec", type=float, default=3.0)
     parser.add_argument("--samples", type=int, default=96)
     parser.add_argument("--preview-frame", type=int, default=15)
     parser.add_argument("--device", choices=("auto", "cpu"), default="cpu")

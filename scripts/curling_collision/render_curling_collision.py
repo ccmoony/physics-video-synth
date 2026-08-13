@@ -367,7 +367,7 @@ def create_scenario(args: argparse.Namespace) -> dict[str, object]:
                 "stone_friction": 0.15,
                 "stone_restitution": 0.0,
                 "ice_friction": 0.015,
-                "launch_speed": 0.9,
+                "launch_speed": 1.5,
                 "start_separation": 5.0,
                 "gravity": [0.0, 0.0, -9.8],
             },

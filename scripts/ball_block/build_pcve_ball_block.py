@@ -174,7 +174,7 @@ def parse_args() -> argparse.Namespace:
     # 3 s. The collision lands on frame 14 and the block has always stopped by
     # the end; the ball sometimes has not, which is itself part of what
     # separates several of the cases.
-    parser.add_argument("--duration-sec", type=float, default=3.0)
+    parser.add_argument("--duration-sec", type=float, default=4.0)
     parser.add_argument("--samples", type=int, default=32)
     parser.add_argument("--device", choices=("auto", "cpu"), default="auto")
     parser.add_argument("--surface-marks", choices=("none", "subtle", "full"), default="none")

@@ -137,7 +137,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--blender', type=Path, default=DEFAULT_BLENDER)
     parser.add_argument('--resolution', nargs=2, type=int, default=(1280, 720))
     parser.add_argument('--fps', type=int, default=24)
-    parser.add_argument('--duration-sec', type=float, default=1.6)
+    parser.add_argument('--duration-sec', type=float, default=4.0)
     parser.add_argument('--samples', type=int, default=128)
     parser.add_argument('--device', choices=('auto', 'cpu'), default='auto')
     parser.add_argument('--skip-existing', action='store_true')
